@@ -1,0 +1,11 @@
+{
+  "name": "replayed chunk",
+  "description": "A chunk already marked processed is an idempotent no-op.",
+  "initialMemory": { "revision": 2, "topics": [], "protected": [], "processedChunkIds": ["chunk-replayed"] },
+  "chunk": { "id": "chunk-replayed", "createdAt": "2026-09-18T00:00:00.000Z", "messages": [{ "id": "message-replayed", "role": "user", "content": "Already handled." }] },
+  "taskContext": { "currentTask": "Test deterministic replay", "compactionInstructions": [] },
+  "classifierPolicy": { "relevanceThreshold": 0.5, "sameInfoMinConfidence": 0.8, "uncoveredNoChangeMinConfidence": 0.8 },
+  "executionPolicy": { "mode": "active", "bypassAuditRate": 0, "auditSeed": "fixture-seed" },
+  "stubs": { "relevance": [], "assessments": [], "proposals": [], "compressions": [], "comparisons": [] },
+  "expected": { "status": "replayed", "revision": 2 }
+}
