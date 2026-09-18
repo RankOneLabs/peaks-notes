@@ -134,6 +134,11 @@ test("shadow commits a writer patch despite a confident same-info decision", asy
   expect(result.status).toBe("committed");
   expect(store.memory.topics[0]?.summary).toBe("LAN only, confirmed.");
   expect(writer.proposeCalls[0]?.assessment).toBeUndefined();
+  expect(store.journal[0]).toMatchObject({
+    type: "audit_record",
+    proposedBypass: true,
+    sampled: false,
+  });
 });
 
 test("active full-rate audit journals but never applies its patch", async () => {

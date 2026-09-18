@@ -3,16 +3,19 @@ import type {
   Chunk,
   Classifier,
   ClassifierPolicy,
+  Commit,
+  DomainError,
   Evaluator,
+  EvaluationJournalEntry,
   ExecutionPolicy,
   IngestResult,
   Memory,
   MemoryPatch,
   RelevanceResult,
+  Result,
   TaskContext,
   Writer,
 } from "../schema";
-import type { Store } from "../store/store";
 import { applyPatch } from "./apply_patch";
 import { buildCommit } from "./build_commit";
 import { decideRouting, type RoutingDecision } from "./decide_routing";
@@ -39,7 +42,7 @@ const message = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
 export type IngestDependencies = {
-  store: Store;
+  store: IngestStore;
   classifier: Classifier;
   writer: Writer;
   evaluator?: Evaluator;
@@ -48,6 +51,17 @@ export type IngestDependencies = {
   mode?: "shadow" | "active" | "baseline";
   auditDeadlineMs?: number;
 };
+
+/** Minimal persistence port consumed by orchestration; no store implementation dependency. */
+export interface IngestStore {
+  archive(chunk: Chunk): Promise<Result<void, DomainError>>;
+  load(): Promise<Result<Memory, DomainError>>;
+  commit(
+    expectedRevision: number,
+    change: Commit,
+  ): Promise<Result<{ status: "committed" | "replayed"; revision: number }, DomainError>>;
+  appendJournal(entry: EvaluationJournalEntry): Promise<Result<void, DomainError>>;
+}
 
 type Classification = {
   relevance?: RelevanceResult;
@@ -199,6 +213,24 @@ export const ingest = async (
       : await classify(chunk, memory, taskContext, dependencies.classifier, dependencies.classifierPolicy);
   if (mode === "active" && classification.failure !== undefined) {
     return retained(chunk, `classifier escalation: ${classification.failure}`);
+  }
+  if (mode === "shadow" && classification.routing?.kind === "bypass") {
+    const policy = dependencies.executionPolicy ?? {
+      mode: "shadow" as const,
+      bypassAuditRate: 0,
+      auditSeed: "",
+    };
+    await dependencies.store.appendJournal({
+      type: "audit_record",
+      id: `journal-${chunk.id}-shadow-routing` as never,
+      occurredAt: chunk.createdAt,
+      chunkId: chunk.id,
+      snapshotRevision: memory.revision,
+      policy: { ...policy, mode: "shadow" },
+      sampled: false,
+      proposedBypass: true,
+      outcome: "not_sampled",
+    });
   }
 
   const forcedWriter = protectedResult.value.length > 0;
