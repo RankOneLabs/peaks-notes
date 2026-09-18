@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MemoryPatchSchema } from "./writer";
+import { MemoryPatchSchema, UpdateInputSchema } from "./writer";
 
 const emptyPatch = {
   replacements: [],
@@ -43,5 +43,25 @@ describe("MemoryPatchSchema", () => {
         ],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("UpdateInputSchema", () => {
+  test("carries the complete validated chunk rather than only its id", () => {
+    const result = UpdateInputSchema.safeParse({
+      chunk: {
+        id: "chunk-1",
+        createdAt: "2026-09-18T00:00:00.000Z",
+        messages: [
+          { id: "message-1", role: "user", content: "Remember this." },
+        ],
+      },
+      memory: { revision: 0, topics: [], protected: [], processedChunkIds: [] },
+      taskContext: { currentTask: "Build", compactionInstructions: [] },
+      affectedTopicIds: [],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.chunk.messages).toHaveLength(1);
   });
 });

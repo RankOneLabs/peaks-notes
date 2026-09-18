@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { MessageIdSchema, ProtectedRecordIdSchema, TopicIdSchema } from "./ids";
+import {
+  ChunkIdSchema,
+  MessageIdSchema,
+  ProtectedRecordIdSchema,
+  TopicIdSchema,
+} from "./ids";
 
 /** Spec §4: exact source span supporting stored state. */
 export const SourceRefSchema = z
@@ -61,7 +66,7 @@ export const MemorySchema = z
     revision: z.number().int().nonnegative(),
     topics: z.array(TopicSchema),
     protected: z.array(ProtectedRecordSchema),
-    processedChunkIds: z.array(z.string().min(1)),
+    processedChunkIds: z.array(ChunkIdSchema),
   })
   .strict();
 export type Memory = z.infer<typeof MemorySchema>;

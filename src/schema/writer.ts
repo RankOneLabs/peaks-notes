@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { ChunkSchema } from "./chunk";
 import { AssessmentSchema } from "./classifier";
-import { ChunkIdSchema, ProtectedRecordIdSchema, TopicIdSchema } from "./ids";
+import { ProtectedRecordIdSchema, TopicIdSchema } from "./ids";
 import {
   MemorySchema,
   ProtectedRecordSchema,
@@ -31,7 +32,7 @@ export type NewTopic = z.infer<typeof NewTopicSchema>;
 /** Spec §5 Step D prose: full writer evidence and current snapshot. */
 export const UpdateInputSchema = z
   .object({
-    chunkId: ChunkIdSchema,
+    chunk: ChunkSchema,
     memory: MemorySchema,
     taskContext: TaskContextSchema,
     affectedTopicIds: z.array(TopicIdSchema),

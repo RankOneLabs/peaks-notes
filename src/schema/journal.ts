@@ -118,14 +118,25 @@ export type EvaluationJournalEntry = z.infer<
 >;
 
 /** Spec §5 Step E prose: state and journal event applied in one transaction. */
-export const CommitSchema = z
+export const CommittedUpdateCommitSchema = z
   .object({
+    type: z.literal("committed_update"),
     chunkId: ChunkIdSchema,
     memory: MemorySchema,
-    journalEntry: z.discriminatedUnion("type", [
-      CommittedUpdateJournalEntrySchema,
-      NoUpdateJournalEntrySchema,
-    ]),
+    journalEntry: CommittedUpdateJournalEntrySchema,
   })
   .strict();
+
+export const NoUpdateCommitSchema = z
+  .object({
+    type: z.literal("no_update"),
+    chunkId: ChunkIdSchema,
+    journalEntry: NoUpdateJournalEntrySchema,
+  })
+  .strict();
+
+export const CommitSchema = z.discriminatedUnion("type", [
+  CommittedUpdateCommitSchema,
+  NoUpdateCommitSchema,
+]);
 export type Commit = z.infer<typeof CommitSchema>;

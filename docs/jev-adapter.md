@@ -16,9 +16,12 @@ These facts support two sequential logical passes in the v0.4 spec: independent 
 
 ## Pages checked
 
+- [TypeSafe Score primitive](https://docs.typesafe.ai/primitives/score) — official request and response shape, 2–10 zero-indexed ordered levels, probability-weighted score, probabilities, and confidence.
+- [TypeSafe Noul primitive](https://docs.typesafe.ai/primitives/noul) — official yes-probability response and explicit confirmation that Noul has no separate confidence field.
+- [TypeSafe confidence](https://docs.typesafe.ai/confidence) — official distinction between Choice/Score confidence and Noul probability.
 - [JevAI Playground documentation](https://www.jevai.org/docs) — request fields, shared state, Choice/Score/Noul criteria and response shapes.
 - [JevAI Decision Playground](https://www.jevai.org/playground) — live request preview and the statement that questions share state and are answered independently.
 - [TypeSafe AI: Introducing System One Models and Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) — provider description of Jev as unstructured state in and typed probabilistic decisions out.
 - [TypeSafe AI home](https://typesafe.ai/) — provider description of typed decisions with probabilities and confidence, with application-owned action/escalation thresholds.
 
-The JevAI community pages expose a current playground contract, not a guarantee that a future production account uses the same endpoint or model identifier. Re-verify the authenticated TypeSafe API documentation when the Jev adapter is implemented.
+The official TypeSafe pages are the primary source for primitive semantics. The JevAI community pages are secondary evidence for a current playground contract, not a guarantee that a future production account uses the same endpoint or model identifier. Re-verify the authenticated TypeSafe API documentation when the Jev adapter is implemented.

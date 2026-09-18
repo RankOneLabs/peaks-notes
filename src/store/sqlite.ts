@@ -14,12 +14,9 @@ import {
 import { migrate } from "./migrations";
 import type { CommitResult, Store } from "./store";
 
-type FailureInjector = {
-  afterMemoryWrite?: () => void;
-};
-
 type RevisionRow = { revision: number; document: string };
 type JournalRow = { document: string };
+type ProcessedChunkRow = { chunkId: string };
 
 class StaleRevisionError extends Error {
   constructor(
@@ -45,13 +42,21 @@ const storageError = (operation: string, cause: unknown): DomainError => ({
 const issues = (error: { issues: Array<{ message: string }> }): string[] =>
   error.issues.map((issue) => issue.message);
 
+const parseJson = (
+  text: string,
+): { ok: true; value: unknown } | { ok: false } => {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false };
+  }
+};
+
 export class SqliteStore implements Store {
   readonly #database: Database;
-  readonly #failureInjector: FailureInjector;
 
-  constructor(path = ":memory:", failureInjector: FailureInjector = {}) {
+  constructor(path = ":memory:") {
     this.#database = new Database(path, { create: true, strict: true });
-    this.#failureInjector = failureInjector;
     migrate(this.#database);
   }
 
@@ -82,12 +87,18 @@ export class SqliteStore implements Store {
 
   async load(): ReturnType<Store["load"]> {
     let row: RevisionRow | null;
+    let processedRows: ProcessedChunkRow[];
     try {
       row = this.#database
         .query<RevisionRow, []>(
           "SELECT revision, document FROM memory_state WHERE singleton = 1",
         )
         .get();
+      processedRows = this.#database
+        .query<ProcessedChunkRow, []>(
+          "SELECT chunk_id AS chunkId FROM processed_chunks ORDER BY rowid",
+        )
+        .all();
     } catch (cause) {
       return err(storageError("load", cause));
     }
@@ -98,10 +109,37 @@ export class SqliteStore implements Store {
         resource: "memory",
       });
     }
-    const parsed = MemorySchema.safeParse(JSON.parse(row.document));
-    return parsed.success
-      ? ok(parsed.data)
-      : err(validationError("stored memory is invalid", issues(parsed.error)));
+    const document = parseJson(row.document);
+    if (!document.ok) {
+      return err(
+        validationError("stored memory is invalid", [
+          "document is not valid JSON",
+        ]),
+      );
+    }
+    const parsed = MemorySchema.safeParse(document.value);
+    if (!parsed.success) {
+      return err(
+        validationError("stored memory is invalid", issues(parsed.error)),
+      );
+    }
+    const memory = MemorySchema.safeParse({
+      ...parsed.data,
+      processedChunkIds: [
+        ...new Set([
+          ...parsed.data.processedChunkIds,
+          ...processedRows.map(({ chunkId }) => chunkId),
+        ]),
+      ],
+    });
+    return memory.success
+      ? ok(memory.data)
+      : err(
+          validationError(
+            "processed chunk marker is invalid",
+            issues(memory.error),
+          ),
+        );
   }
 
   async commit(
@@ -140,16 +178,17 @@ export class SqliteStore implements Store {
           throw new StaleRevisionError(expectedRevision, current.revision);
         }
 
-        this.#database
-          .query(
-            "UPDATE memory_state SET revision = ?, document = ? WHERE singleton = 1 AND revision = ?",
-          )
-          .run(
-            change.memory.revision,
-            JSON.stringify(change.memory),
-            expectedRevision,
-          );
-        this.#failureInjector.afterMemoryWrite?.();
+        if (change.type === "committed_update") {
+          this.#database
+            .query(
+              "UPDATE memory_state SET revision = ?, document = ? WHERE singleton = 1 AND revision = ?",
+            )
+            .run(
+              change.memory.revision,
+              JSON.stringify(change.memory),
+              expectedRevision,
+            );
+        }
         this.#insertJournal(change.journalEntry);
         this.#database
           .query(
@@ -157,10 +196,18 @@ export class SqliteStore implements Store {
           )
           .run(
             change.chunkId,
-            change.memory.revision,
+            change.type === "committed_update"
+              ? change.memory.revision
+              : current.revision,
             new Date().toISOString(),
           );
-        return { status: "committed", revision: change.memory.revision };
+        return {
+          status: "committed",
+          revision:
+            change.type === "committed_update"
+              ? change.memory.revision
+              : current.revision,
+        };
       });
       return ok(transact());
     } catch (cause) {
@@ -216,20 +263,46 @@ export class SqliteStore implements Store {
 
     const versions = new Map<number, Topic>();
     for (const row of rows) {
-      const entry = JournalEntrySchema.safeParse(JSON.parse(row.document));
-      if (!entry.success || entry.data.type !== "committed_update") continue;
+      const document = parseJson(row.document);
+      if (!document.ok) {
+        return err(
+          validationError("stored journal entry is invalid", [
+            "document is not valid JSON",
+          ]),
+        );
+      }
+      const entry = JournalEntrySchema.safeParse(document.value);
+      if (!entry.success || entry.data.type !== "committed_update") {
+        return err(
+          validationError(
+            "stored committed journal entry is invalid",
+            entry.success
+              ? ["document type does not match journal index"]
+              : issues(entry.error),
+          ),
+        );
+      }
       for (const topic of entry.data.previousTopics) {
         if (topic.id === topicId) versions.set(topic.version, topic);
       }
     }
     if (memoryRow !== null) {
-      const memory = MemorySchema.safeParse(JSON.parse(memoryRow.document));
-      if (memory.success) {
-        const current = memory.data.topics.find(
-          (topic) => topic.id === topicId,
+      const document = parseJson(memoryRow.document);
+      if (!document.ok) {
+        return err(
+          validationError("stored memory is invalid", [
+            "document is not valid JSON",
+          ]),
         );
-        if (current !== undefined) versions.set(current.version, current);
       }
+      const memory = MemorySchema.safeParse(document.value);
+      if (!memory.success) {
+        return err(
+          validationError("stored memory is invalid", issues(memory.error)),
+        );
+      }
+      const current = memory.data.topics.find((topic) => topic.id === topicId);
+      if (current !== undefined) versions.set(current.version, current);
     }
     return ok(
       [...versions.values()].sort(
@@ -263,18 +336,20 @@ export class SqliteStore implements Store {
   ): string | undefined {
     if (change.journalEntry.chunkId !== change.chunkId)
       return "journal chunkId differs from commit chunkId";
+    if (change.journalEntry.snapshotRevision !== expectedRevision)
+      return "journal snapshotRevision differs from expected revision";
     if (change.journalEntry.previousRevision !== expectedRevision)
       return "journal previousRevision differs from expected revision";
-    if (change.journalEntry.newRevision !== change.memory.revision)
-      return "journal newRevision differs from memory revision";
-    const expectedNewRevision =
-      change.journalEntry.type === "committed_update"
-        ? expectedRevision + 1
-        : expectedRevision;
-    if (change.memory.revision !== expectedNewRevision)
-      return "memory revision does not match commit type";
-    if (!change.memory.processedChunkIds.includes(change.chunkId))
-      return "memory does not contain processed chunk id";
+    if (change.type === "committed_update") {
+      if (change.journalEntry.newRevision !== change.memory.revision)
+        return "journal newRevision differs from memory revision";
+      if (change.memory.revision !== expectedRevision + 1)
+        return "memory revision does not advance by one";
+      if (!change.memory.processedChunkIds.includes(change.chunkId))
+        return "memory does not contain processed chunk id";
+    } else if (change.journalEntry.newRevision !== expectedRevision) {
+      return "no-update journal revision differs from expected revision";
+    }
     return undefined;
   }
 }
