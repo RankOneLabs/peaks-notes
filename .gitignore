@@ -1,1 +1,6 @@
 comms/
+node_modules/
+bun.lock
+*.db
+*.db-shm
+*.db-wal
