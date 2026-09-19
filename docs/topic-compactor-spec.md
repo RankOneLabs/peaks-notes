@@ -1,4 +1,4 @@
-# Dynamic Topic Compactor — MVP Specification
+# Live Conversation Summarizer — MVP Specification
 
 Status: proposed v0.5 · 19 September 2026
 
@@ -6,7 +6,7 @@ Status: proposed v0.5 · 19 September 2026
 
 Maintain a compact, topic-organized memory of a conversation as it happens. Use a cheap classifier to recognize information already represented and route changes. In active mode, invoke a generative LLM when information needs synthesis, reconciliation, or a new topic, plus configured bypass audits. Start in shadow mode: every chunk receives a generative summary/update assessment while classifier decisions are recorded without controlling memory.
 
-The compactor only reads the conversation. It never edits, trims, or replaces the host's messages or context. Its output is a separate summary rendered from committed memory after each chunk; what consumes that summary is a downstream decision outside this specification.
+The summarizer only reads the conversation. It never edits, trims, or replaces the host's messages or context. Its output is a separate summary rendered from committed memory; what consumes that summary—including any handoff or context-compaction system—is a downstream decision outside this specification.
 
 The dynamic schema is the current set of stable topic IDs exposed as routing options. The operation schema stays fixed. Adding a topic adds an option to subsequent classifier requests; it does not require retraining or generating application code.
 

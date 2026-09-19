@@ -5,11 +5,39 @@ import { createConfiguredAdapters } from "../../adapters";
 import { loadConfig } from "../../config";
 import { SqliteStore } from "../../store/sqlite";
 import { ContentModeSchema } from "./chunks";
-import { prepareDirectories, sessionPaths } from "./session_files";
+import {
+  acquireLock,
+  prepareDirectories,
+  releaseLock,
+  sessionPaths,
+} from "./session_files";
 import { summarizeSession } from "./summarize";
 import { sessionDependencies } from "./worker";
 
 const TRANSCRIPTS = join(homedir(), ".claude", "projects");
+
+export type CliArguments = {
+  transcript?: string;
+  mode: "chat" | "tools";
+};
+
+/** Accept one optional transcript path and an order-independent --tools flag. */
+export const parseCliArguments = (args: string[]): CliArguments => {
+  let transcript: string | undefined;
+  let mode: "chat" | "tools" = "chat";
+  for (const argument of args) {
+    if (argument === "--tools") {
+      mode = "tools";
+      continue;
+    }
+    if (argument.startsWith("--"))
+      throw new Error(`unknown option: ${argument}`);
+    if (transcript !== undefined)
+      throw new Error("expected at most one transcript path");
+    transcript = argument;
+  }
+  return transcript === undefined ? { mode } : { transcript, mode };
+};
 
 /** The session Claude Code wrote to most recently, across every project. */
 const latestTranscript = (): string => {
@@ -39,19 +67,24 @@ const latestTranscript = (): string => {
  * it by hand, against any session, without installing anything.
  */
 const main = async (): Promise<void> => {
-  const [given, ...rest] = process.argv.slice(2);
-  const mode = ContentModeSchema.parse(
-    rest.includes("--tools") ? "tools" : "chat",
-  );
-  const transcript = given === undefined ? latestTranscript() : resolve(given);
+  const args = parseCliArguments(process.argv.slice(2));
+  const mode = ContentModeSchema.parse(args.mode);
+  const transcript =
+    args.transcript === undefined
+      ? latestTranscript()
+      : resolve(args.transcript);
   const session = basename(transcript, ".jsonl");
   const paths = sessionPaths(process.cwd(), session);
   prepareDirectories(paths);
 
   const bytes = statSync(transcript).size;
   console.log(`reading ${transcript} (${bytes} bytes, ${mode})`);
-  const store = new SqliteStore(paths.database);
+  if (!acquireLock(paths.lock))
+    throw new Error(`session ${session} is already being summarized`);
+  let store: SqliteStore | undefined;
   try {
+    store = new SqliteStore(paths.database);
+    const config = loadConfig();
     const report = await summarizeSession({
       sessionId: session,
       transcriptPath: transcript,
@@ -61,8 +94,8 @@ const main = async (): Promise<void> => {
       dependencies: sessionDependencies(
         session,
         store,
-        loadConfig(),
-        createConfiguredAdapters(loadConfig()),
+        config,
+        createConfiguredAdapters(config),
       ),
     });
     if (!report.ok) {
@@ -79,7 +112,8 @@ const main = async (): Promise<void> => {
     console.log(`\n${await Bun.file(paths.summary).text()}`);
     console.log(paths.summary);
   } finally {
-    store.close();
+    store?.close();
+    releaseLock(paths.lock);
   }
 };
 

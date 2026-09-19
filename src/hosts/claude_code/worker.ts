@@ -75,8 +75,9 @@ export const runWorker = async (args: WorkerArguments): Promise<void> => {
   let done = 0;
   while (readPending(paths.pending) > done) {
     if (!acquireLock(paths.lock)) return;
-    const store = new SqliteStore(paths.database);
+    let store: SqliteStore | undefined;
     try {
+      store = new SqliteStore(paths.database);
       const dependencies = sessionDependencies(
         args.session,
         store,
@@ -110,7 +111,7 @@ export const runWorker = async (args: WorkerArguments): Promise<void> => {
           log(`unprocessed ${chunkId}: ${reason}`);
       }
     } finally {
-      store.close();
+      store?.close();
       releaseLock(paths.lock);
     }
   }
