@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { StubClassifier } from "../classifier/stub";
+import { LlmEvaluator } from "../evaluator/llm_evaluator";
 import { StubEvaluator } from "../evaluator/stub";
 import { renderContext } from "../render/render";
 import { DeterministicFixtureSchema } from "../replay/fixture";
 import type {
+  Classifier,
   Commit,
   DomainError,
   EvaluationJournalEntry,
@@ -18,6 +20,7 @@ import type {
 } from "../schema";
 import { err, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
+import { RecordedProvider } from "../writer/recorded";
 import { StubWriter } from "../writer/stub";
 import { ingest } from "./ingest";
 import { protect } from "./protect";
@@ -173,6 +176,224 @@ describe("deterministic fixtures", () => {
       }
     });
   }
+});
+
+test("baseline runs every deterministic fixture without classifier calls", async () => {
+  let relevanceCalls = 0;
+  let relationshipCalls = 0;
+  const countingClassifier: Classifier = {
+    async scoreRelevance() {
+      relevanceCalls += 1;
+      throw new Error("baseline must not score relevance");
+    },
+    async classifyRelationships() {
+      relationshipCalls += 1;
+      throw new Error("baseline must not classify relationships");
+    },
+  };
+
+  for (const fixture of fixtures) {
+    const store = new MemoryStore(fixture.initialMemory);
+    await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: countingClassifier,
+      writer: new StubWriter({
+        proposals: fixture.stubs.proposals,
+        compressions: fixture.stubs.compressions,
+      }),
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: fixture.executionPolicy,
+      mode: "baseline",
+      writerDeadlineMs: fixture.writerDeadlineMs ?? 30_000,
+    });
+  }
+
+  expect(relevanceCalls).toBe(0);
+  expect(relationshipCalls).toBe(0);
+});
+
+test("unchanged live evaluation is journaled with the live model identity", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const topic = fixture.initialMemory.topics[0];
+  if (topic === undefined) throw new Error("fixture topic missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const evaluatorProvider = new RecordedProvider([]);
+  const evaluator = new LlmEvaluator(evaluatorProvider, {
+    provider: "openai",
+    apiKey: "unused",
+    model: "live-evaluator-model",
+    deadlineMs: 100,
+    promptVersion: "evaluator-live-v7",
+    maxInputTokens: 32_000,
+  });
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({
+      proposals: [
+        {
+          output: {
+            replacements: [
+              {
+                topicId: topic.id,
+                expectedVersion: topic.version,
+                title: topic.title,
+                description: topic.description,
+                summary: topic.summary,
+                sources: topic.sources,
+                unresolved: topic.unresolved,
+              },
+            ],
+            newTopics: [],
+            addProtected: [],
+            supersedeProtected: [],
+          },
+        },
+      ],
+    }),
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    attemptIdFactory: () => "unchanged-live-evaluator",
+  });
+
+  expect(result.status).toBe("committed");
+  expect(evaluatorProvider.requests).toHaveLength(0);
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison",
+      comparison: { verdict: "equivalent", changes: [] },
+      evaluatorModel: {
+        provider: "recorded",
+        model: "live-evaluator-model",
+        promptVersion: "evaluator-v1",
+      },
+    }),
+  );
+});
+
+test("unsampled audit does not reuse metadata from an earlier writer call", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  let proposeCalls = 0;
+  let lastCall:
+    | {
+        provider: string;
+        model: string;
+        promptVersion: string;
+        usage: {
+          inputTokens: number;
+          outputTokens: number;
+          totalTokens: number;
+        };
+        latencyMs: number;
+      }
+    | undefined;
+  const writer: Writer & { getLastCall: () => typeof lastCall } = {
+    async propose() {
+      proposeCalls += 1;
+      lastCall = {
+        provider: "recorded",
+        model: "previous-call",
+        promptVersion: "writer-v1",
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        latencyMs: 5,
+      };
+      return {
+        replacements: [],
+        newTopics: [],
+        addProtected: [],
+        supersedeProtected: [],
+      };
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+    getLastCall: () => lastCall,
+  };
+  await writer.propose({
+    chunk: fixture.chunk,
+    memory: fixture.initialMemory,
+    taskContext: fixture.taskContext,
+    affectedTopicIds: [],
+  });
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: {
+      ...fixture.executionPolicy,
+      mode: "active",
+      bypassAuditRate: 0,
+    },
+  });
+  expect(proposeCalls).toBe(1);
+  const audit = store.journal.find((entry) => entry.type === "audit_record");
+  expect(audit).toMatchObject({ sampled: false, outcome: "not_sampled" });
+  expect(audit).not.toHaveProperty("writerModel");
+  expect(audit).not.toHaveProperty("writerUsage");
+  expect(audit).not.toHaveProperty("writerLatencyMs");
+});
+
+test("malformed adapter metadata is not copied into a commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const topic = fixture.initialMemory.topics[0];
+  if (topic === undefined) throw new Error("fixture topic missing");
+  const writer: Writer & { getLastCall: () => unknown } = {
+    async propose() {
+      return {
+        replacements: [
+          {
+            topicId: topic.id,
+            expectedVersion: topic.version,
+            title: topic.title,
+            description: topic.description,
+            summary: `${topic.summary} Updated.`,
+            sources: [{ messageId: fixture.chunk.messages[0]?.id as never }],
+            unresolved: topic.unresolved,
+          },
+        ],
+        newTopics: [],
+        addProtected: [],
+        supersedeProtected: [],
+      };
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+    getLastCall: () => ({ provider: "unchecked", latencyMs: -1 }),
+  };
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+    mode: "baseline",
+  });
+  const commit = store.commits.find(
+    (candidate) => candidate.type === "committed_update",
+  );
+  expect(commit?.type).toBe("committed_update");
+  if (commit?.type !== "committed_update") throw new Error("commit missing");
+  expect(commit.journalEntry.writerModel.provider).toBe("stub");
 });
 
 test("shadow commits a writer patch despite a confident same-info decision", async () => {

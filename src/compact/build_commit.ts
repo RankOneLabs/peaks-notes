@@ -6,6 +6,7 @@ import type {
   MemoryPatch,
   ModelIdentifier,
   RelevanceResult,
+  Usage,
 } from "../schema";
 
 const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -20,6 +21,9 @@ export type CommitBuildOptions = {
   relevance?: RelevanceResult;
   assessment?: Assessment;
   reason?: string;
+  writerModel?: ModelIdentifier;
+  writerUsage?: Usage;
+  writerLatencyMs?: number;
 };
 
 export const buildCommit = (
@@ -68,10 +72,10 @@ export const buildCommit = (
       previousRevision: before.revision,
       newRevision: after.revision,
       ...(Object.keys(classifier).length === 0 ? {} : { classifier }),
-      writerModel,
+      writerModel: options.writerModel ?? writerModel,
       proposedPatch: patch,
-      writerUsage: usage,
-      writerLatencyMs: 0,
+      writerUsage: options.writerUsage ?? usage,
+      writerLatencyMs: options.writerLatencyMs ?? 0,
       previousTopics: structuredClone(before.topics),
       ...(options.reason === undefined ? {} : { reason: options.reason }),
     },

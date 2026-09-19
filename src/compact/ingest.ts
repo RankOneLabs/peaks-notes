@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type {
   Assessment,
   Chunk,
@@ -14,16 +15,20 @@ import type {
   JournalEntryId,
   Memory,
   MemoryPatch,
+  ModelIdentifier,
   RelevanceResult,
   Result,
   TaskContext,
+  Usage,
   Writer,
 } from "../schema";
 import {
   AssessmentSchema,
   JournalEntryIdSchema,
+  ModelIdentifierSchema,
   RelevanceResultSchema,
   SemanticComparisonSchema,
+  UsageSchema,
 } from "../schema";
 import { applyPatch } from "./apply_patch";
 import { runBaseline } from "./baseline";
@@ -50,6 +55,59 @@ const hasChanges = (patch: MemoryPatch): boolean =>
 
 const message = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
+
+type AdapterCall = {
+  provider: string;
+  model: string;
+  promptVersion: string;
+  usage: Usage;
+  latencyMs: number;
+};
+
+const AdapterCallSchema = ModelIdentifierSchema.extend({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  promptVersion: z.string().min(1),
+  usage: UsageSchema.refine(
+    (usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens,
+    { message: "totalTokens must equal inputTokens plus outputTokens" },
+  ),
+  latencyMs: z.number().nonnegative(),
+}).strict();
+
+const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
+  if (
+    typeof adapter !== "object" ||
+    adapter === null ||
+    !("getLastCall" in adapter) ||
+    typeof adapter.getLastCall !== "function"
+  )
+    return undefined;
+  const parsed = AdapterCallSchema.safeParse(adapter.getLastCall());
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterCallFor = (
+  adapter: unknown,
+  result: object,
+): AdapterCall | undefined => {
+  if (
+    typeof adapter === "object" &&
+    adapter !== null &&
+    "getCallFor" in adapter &&
+    typeof adapter.getCallFor === "function"
+  ) {
+    const parsed = AdapterCallSchema.safeParse(adapter.getCallFor(result));
+    return parsed.success ? parsed.data : undefined;
+  }
+  return undefined;
+};
+
+const modelIdentifier = (call: AdapterCall): ModelIdentifier => ({
+  provider: call.provider,
+  model: call.model,
+  promptVersion: call.promptVersion,
+});
 
 export type IngestDependencies = {
   store: IngestStore;
@@ -297,9 +355,14 @@ const appendSemanticComparison = async (
     )
     .then(
       (value) => {
+        const evaluatorCall = adapterCallFor(evaluator, value);
         const parsed = SemanticComparisonSchema.safeParse(value);
         return parsed.success
-          ? { type: "comparison" as const, value: parsed.data }
+          ? {
+              type: "comparison" as const,
+              value: parsed.data,
+              evaluatorCall,
+            }
           : {
               type: "invalid_response" as const,
               reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
@@ -333,9 +396,21 @@ const appendSemanticComparison = async (
     );
     return;
   }
+  if (result.value.value.verdict === "uncertain") {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "failed",
+      "semantic comparison was inconclusive: evaluator returned uncertain",
+    );
+    return;
+  }
 
   let journaled: Result<void, DomainError>;
   try {
+    const evaluatorCall = result.value.evaluatorCall;
     journaled = await dependencies.store.appendJournal({
       type: "semantic_comparison",
       id: journalId(chunk, attempt, "comparison"),
@@ -343,13 +418,21 @@ const appendSemanticComparison = async (
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
       comparison: result.value.value,
-      evaluatorModel: {
-        provider: "stub",
-        model: "deterministic-evaluator",
-        promptVersion: "fixture-v1",
+      evaluatorModel:
+        evaluatorCall === undefined
+          ? {
+              provider: "stub",
+              model: "deterministic-evaluator",
+              promptVersion: "fixture-v1",
+            }
+          : modelIdentifier(evaluatorCall),
+      evaluatorUsage: evaluatorCall?.usage ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
       },
-      evaluatorUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      evaluatorLatencyMs: Math.max(0, performance.now() - startedAt),
+      evaluatorLatencyMs:
+        evaluatorCall?.latencyMs ?? Math.max(0, performance.now() - startedAt),
     });
   } catch (cause) {
     await appendComparisonFailure(
@@ -393,6 +476,7 @@ const appendAudit = async (
     | "failed"
     | "timed_out" = "not_sampled";
   let patch: MemoryPatch | undefined;
+  let auditWriterCall: AdapterCall | undefined;
   if (sampled) {
     const deadline = dependencies.auditDeadlineMs ?? DEFAULT_AUDIT_DEADLINE_MS;
     const result = await withDeadline(
@@ -405,7 +489,11 @@ const appendAudit = async (
             affectedTopicIds: memory.topics.map(({ id }) => id),
           }),
         )
-        .then((value) => ({ type: "patch" as const, value }))
+        .then((value) => ({
+          type: "patch" as const,
+          value,
+          writerCall: adapterCallFor(dependencies.writer, value),
+        }))
         .catch(() => ({ type: "failed" as const })),
       deadline,
     );
@@ -413,6 +501,7 @@ const appendAudit = async (
     else {
       if (result.value.type === "failed") outcome = "failed";
       else {
+        auditWriterCall = result.value.writerCall;
         const valid = validatePatch(memory, chunk, result.value.value);
         if (!valid.ok) outcome = "failed";
         else {
@@ -433,6 +522,13 @@ const appendAudit = async (
     proposedBypass: true,
     outcome,
     ...(patch === undefined ? {} : { patch }),
+    ...(auditWriterCall === undefined
+      ? {}
+      : {
+          writerModel: modelIdentifier(auditWriterCall),
+          writerUsage: auditWriterCall.usage,
+          writerLatencyMs: auditWriterCall.latencyMs,
+        }),
   });
   if (!journaled.ok) return `audit journal failed: ${journaled.error.message}`;
 
@@ -697,18 +793,7 @@ export const ingest = async (
   }
   const changed = hasChanges(valid.value);
   const after = changed ? applyPatch(memory, valid.value, chunk.id) : undefined;
-  if (proposedShadowBypass && changed && after !== undefined) {
-    await appendSemanticComparison(
-      dependencies,
-      attempt,
-      chunk,
-      memory,
-      after,
-      taskContext,
-      dependencies.shadowComparisonDeadlineMs ??
-        DEFAULT_SHADOW_COMPARISON_DEADLINE_MS,
-    );
-  }
+  const writerCall = lastAdapterCall(dependencies.writer);
   const commit = buildCommit(
     memory,
     after,
@@ -727,6 +812,13 @@ export const ingest = async (
           : changed
             ? (classification.routing?.reason ?? "writer")
             : `${classification.routing?.reason ?? "writer"}; writer returned empty patch`,
+      ...(writerCall === undefined
+        ? {}
+        : {
+            writerModel: modelIdentifier(writerCall),
+            writerUsage: writerCall.usage,
+            writerLatencyMs: writerCall.latencyMs,
+          }),
     },
   );
   const result = await dependencies.store.commit(memory.revision, commit);
@@ -738,6 +830,18 @@ export const ingest = async (
       chunkId: chunk.id,
       revision: result.value.revision,
     };
+  if (proposedShadowBypass && changed && after !== undefined) {
+    await appendSemanticComparison(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      after,
+      taskContext,
+      dependencies.shadowComparisonDeadlineMs ??
+        DEFAULT_SHADOW_COMPARISON_DEADLINE_MS,
+    );
+  }
   return changed
     ? {
         status: "committed",

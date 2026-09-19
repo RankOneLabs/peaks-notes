@@ -10,6 +10,8 @@ These are explicit precedents for reviewer confirmation or amendment before late
 - **Errors and idempotency:** Store methods return local `Result` values, and `try`/`catch` surrounds only `bun:sqlite` calls. Enforce replayed-chunk idempotency inside the transaction to close retry races.
 - **Memory persistence:** Store one JSON memory document with a revision column and retain history in the append-only journal. Whole-document optimistic updates match the MVP access pattern.
 - **Model roles and chunks:** Use separate Classifier, Writer, and Evaluator roles; compression is `Writer.compress`. The host forms chunks, while the core validates complete chunks including tool call/result pairing.
+- **Live adapters:** Generative adapters share the provider seam in `src/writer/provider.ts`, but writer and evaluator use separate versioned prompts. Model credentials are startup-validated environment configuration and never enter prompts, fixtures, or journals.
+- **Jev boundary:** Call System One through the raw, Zod-validated HTTP boundary. Pin `jev-1.13.0`, use Noul probability for relevance, use Choice confidence only as the bypass gate signal, retain full distributions in adapter call traces, and keep the two logical passes separate.
 
 ## Commands
 
