@@ -19,5 +19,7 @@ These are explicit precedents for reviewer confirmation or amendment before late
 - Typecheck: `bun run typecheck`
 - Lint and format check: `bun run lint`
 - Test: `bun test`
+- Replay fixtures: `bun run replay --fixtures fixtures/deterministic --adapters stub`
+- Threshold sweep (dev fixtures only): `bun run sweep --fixtures fixtures/semantic --adapters stub`
 
 Use explicit `.js`-free TypeScript imports under Bun's bundler resolution. Export public contracts through `src/schema/index.ts` and the package entry point. Add runtime Zod schemas for every value that crosses an I/O boundary.

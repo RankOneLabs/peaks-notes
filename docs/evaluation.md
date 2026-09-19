@@ -8,13 +8,13 @@ Run deterministic acceptance fixtures with recorded stub responses:
 bun run replay --fixtures fixtures/deterministic --adapters stub
 ```
 
-`recorded` is currently an explicit offline alias for `stub`: both consume the fixture's checked-in adapter response queues without network access. It reserves the mode name for a future standalone trace format; it does not yet load a different transcript schema. `live` constructs the configured Jev, writer, and evaluator adapters from the environment described in `docs/jev-adapter.md`. An archived journal uses a JSON object with `entries`, `labels`, and an optional `policy`:
+`recorded` is currently an explicit offline alias for `stub`: both consume the fixture's checked-in adapter response queues without network access. It reserves the mode name for a future standalone trace format; it does not yet load a different transcript schema. `live` constructs the configured Jev, writer, and evaluator adapters from the environment described in the README's configuration table, and never asserts fixture expectations. An archived journal uses a JSON object with `entries`, `labels`, and an optional `policy`:
 
 ```sh
 bun run replay --journal traces/run.json --adapters recorded --report metrics.json
 ```
 
-Replay reads existing audit records as the authoritative sample assignments. Programmatic reruns can pass those assignments back through `recordedAuditAssignments`; they are not redrawn from a changed rate or seed.
+`--manifest <path>` replaces the default `fixtures/manifest.json`. Replay reads existing audit records as the authoritative sample assignments. Programmatic reruns can pass those assignments back through `recordedAuditAssignments`; they are not redrawn from a changed rate or seed.
 
 ## Threshold sweep
 
@@ -30,7 +30,7 @@ The sweep minimizes protected/critical losses and false no-updates first, then m
 bun run replay --fixtures fixtures/semantic --adapters stub --mode active --policy-record fixtures/sweep-record.json
 ```
 
-Fixture expectations are asserted whenever the effective mode, execution policy, and classifier policy equal the ones the fixture was authored with; the final `Expectations:` line reports how many were asserted and names the ones skipped. A swept policy that differs from the authored thresholds therefore skips assertions, because the authored outcome no longer applies.
+Fixture expectations are asserted whenever the effective mode, execution policy, and classifier policy equal the ones the fixture was authored with; the final `Expectations:` line reports how many were asserted and names the ones skipped. A swept policy that differs from the authored thresholds therefore skips assertions, because the authored outcome no longer applies. `--mode baseline` skips every fixture for the same reason: none is authored for the always-writer baseline.
 
 Never use `fixtures/held_out` in a sweep or other tuning command. Evaluate it only after choosing and recording the policy.
 
