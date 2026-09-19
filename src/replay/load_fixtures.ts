@@ -125,9 +125,19 @@ export const loadFixtures = async (
   const labels = split === "dev" ? manifest.dev.fixtures : manifest.heldOut.fixtures;
   const byFile = new Map(labels.map((label) => [label.file, label]));
   const files = (await readdir(directory)).filter((file) => file.endsWith(".json")).sort();
+  const normalizedDirectory = directory.replace(/\/$/, "");
+  const discovered = new Set(files.map((file) => `${normalizedDirectory}/${file}`));
+  const missing = labels
+    .map(({ file }) => file)
+    .filter(
+      (file) =>
+        withinDirectory(file, normalizedDirectory) && !discovered.has(file),
+    );
+  if (missing.length > 0)
+    throw new Error(`manifest fixtures are missing from ${directory}: ${missing.join(", ")}`);
   return Promise.all(
     files.map(async (file) => {
-      const relative = `${directory.replace(/\/$/, "")}/${file}`;
+      const relative = `${normalizedDirectory}/${file}`;
       const label = byFile.get(relative);
       if (label === undefined) throw new Error(`fixture has no ${split} label: ${relative}`);
       const fixture = DeterministicFixtureSchema.parse(

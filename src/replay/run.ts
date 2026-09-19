@@ -45,6 +45,7 @@ export type ReplayOptions = {
 export type FixtureReplayResult = {
   file: string;
   result: IngestResult;
+  revision: number;
   journal: JournalEntry[];
   auditSampled?: boolean;
 };
@@ -179,6 +180,7 @@ const runFixture = async (
         budget: rendered.budget,
         required: rendered.required,
       },
+      revision: store.memory.revision,
       journal: [],
     };
   }
@@ -223,15 +225,34 @@ const runFixture = async (
   return {
     file: loaded.path,
     result,
+    revision: store.memory.revision,
     journal: store.journal,
     ...(audit?.type === "audit_record" ? { auditSampled: audit.sampled } : {}),
   };
 };
 
-const assertExpected = (loaded: LoadedFixture, replay: FixtureReplayResult): void => {
+export const assertExpected = (
+  loaded: LoadedFixture,
+  replay: FixtureReplayResult,
+): void => {
   if (replay.result.status !== loaded.fixture.expected.status)
     throw new Error(
       `${loaded.path}: expected ${loaded.fixture.expected.status}, received ${replay.result.status}`,
+    );
+  if (
+    loaded.fixture.expected.revision !== undefined &&
+    replay.revision !== loaded.fixture.expected.revision
+  )
+    throw new Error(
+      `${loaded.path}: expected revision=${loaded.fixture.expected.revision}, received ${replay.revision}`,
+    );
+  const reason = "reason" in replay.result ? replay.result.reason : undefined;
+  if (
+    loaded.fixture.expected.reasonIncludes !== undefined &&
+    !reason?.includes(loaded.fixture.expected.reasonIncludes)
+  )
+    throw new Error(
+      `${loaded.path}: expected reason containing ${JSON.stringify(loaded.fixture.expected.reasonIncludes)}, received ${JSON.stringify(reason)}`,
     );
   if (
     loaded.fixture.expected.auditSampled !== undefined &&
@@ -239,6 +260,15 @@ const assertExpected = (loaded: LoadedFixture, replay: FixtureReplayResult): voi
   )
     throw new Error(
       `${loaded.path}: expected audit sampled=${loaded.fixture.expected.auditSampled}, received ${replay.auditSampled}`,
+    );
+  const audit = replay.journal.find((entry) => entry.type === "audit_record");
+  const auditOutcome = audit?.type === "audit_record" ? audit.outcome : undefined;
+  if (
+    loaded.fixture.expected.auditOutcome !== undefined &&
+    auditOutcome !== loaded.fixture.expected.auditOutcome
+  )
+    throw new Error(
+      `${loaded.path}: expected audit outcome=${loaded.fixture.expected.auditOutcome}, received ${auditOutcome}`,
     );
 };
 

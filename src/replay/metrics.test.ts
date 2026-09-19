@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { JournalEntry } from "../schema";
 import type { FixtureLabel } from "./load_fixtures";
 import { computeMetrics } from "./metrics";
+import { formatReport } from "./report";
 
 const policy = {
   relevanceThreshold: 0.5,
@@ -56,6 +57,17 @@ test("one labeled miss at every gate is counted independently", () => {
     sameInfo: 1,
     uncoveredContent: 1,
   });
+});
+
+test("formatted report includes bypass and relationship confusion metrics", () => {
+  const labels = [label("miss-relevance", "relevance")];
+  const report = formatReport(
+    computeMetrics({ entries: [noUpdate("miss-relevance")], labels, policy }),
+  );
+  expect(report).toContain("False no-updates among bypasses: 100.00%");
+  expect(report).toContain(
+    "New-versus-changing confusion: expected-new/predicted-changing=0, expected-changing/predicted-new=0",
+  );
 });
 
 test("inconclusive comparisons are outside agreement and miss denominators", () => {

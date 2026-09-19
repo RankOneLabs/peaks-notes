@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runReplay } from "./run";
+import { valueAfter } from "./cli";
+import { loadFixtures } from "./load_fixtures";
+import { assertExpected, runReplay } from "./run";
 
 test("stub replay runs deterministic fixtures without protected or critical losses", async () => {
   const result = await runReplay({
@@ -12,6 +14,83 @@ test("stub replay runs deterministic fixtures without protected or critical loss
   expect(result.fixtures).toHaveLength(15);
   expect(result.metrics.protectedContentLosses).toBe(0);
   expect(result.metrics.missedCriticalUpdates).toBe(0);
+});
+
+test("replay validates every populated fixture expectation", async () => {
+  const loaded = (await loadFixtures("fixtures/semantic")).find(
+    ({ fixture }) => fixture.chunk.id === "chunk-equivalent",
+  );
+  const replay = (
+    await runReplay({ fixtures: "fixtures/semantic", adapters: "stub" })
+  ).fixtures.find(({ result }) => result.chunkId === "chunk-equivalent");
+  if (loaded === undefined || replay === undefined)
+    throw new Error("equivalent fixture was not loaded");
+
+  expect(() =>
+    assertExpected(
+      {
+        ...loaded,
+        fixture: {
+          ...loaded.fixture,
+          expected: { ...loaded.fixture.expected, revision: 999 },
+        },
+      },
+      replay,
+    ),
+  ).toThrow("expected revision=999");
+  expect(() =>
+    assertExpected(
+      {
+        ...loaded,
+        fixture: {
+          ...loaded.fixture,
+          expected: { ...loaded.fixture.expected, reasonIncludes: "missing reason" },
+        },
+      },
+      replay,
+    ),
+  ).toThrow("expected reason containing");
+  expect(() =>
+    assertExpected(
+      {
+        ...loaded,
+        fixture: {
+          ...loaded.fixture,
+          expected: { ...loaded.fixture.expected, auditOutcome: "failed" },
+        },
+      },
+      replay,
+    ),
+  ).toThrow("expected audit outcome=failed");
+});
+
+test("fixture loading rejects manifest entries missing from the directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peaks-missing-fixture-"));
+  const manifestPath = join(directory, "manifest.json");
+  try {
+    const manifest = JSON.parse(await readFile("fixtures/manifest.json", "utf8"));
+    manifest.dev.fixtures.push({
+      file: "fixtures/deterministic/missing-declared.json",
+      chunkId: "chunk-missing-declared",
+      requiredCases: ["replayed_chunk"],
+      requiresUpdate: false,
+    });
+    await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    await expect(
+      loadFixtures("fixtures/deterministic", manifestPath),
+    ).rejects.toThrow("missing-declared.json");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI flags reject missing values", () => {
+  expect(() => valueAfter(["--adapters"], "--adapters")).toThrow(
+    "--adapters requires a value",
+  );
+  expect(() => valueAfter(["--adapters", "--mode", "active"], "--adapters")).toThrow(
+    "--adapters requires a value",
+  );
 });
 
 test("recorded audit assignments override resampling", async () => {

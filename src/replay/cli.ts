@@ -4,9 +4,13 @@ import { formatReport } from "./report";
 import { runReplay } from "./run";
 import { runSweep } from "./sweep";
 
-const valueAfter = (args: string[], flag: string): string | undefined => {
+export const valueAfter = (args: string[], flag: string): string | undefined => {
   const index = args.indexOf(flag);
-  return index === -1 ? undefined : args[index + 1];
+  if (index === -1) return undefined;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--"))
+    throw new Error(`${flag} requires a value`);
+  return value;
 };
 
 const adapterMode = (value: string | undefined): ReplayAdapterMode => {
@@ -59,7 +63,8 @@ const main = async (): Promise<void> => {
   console.log(report);
 };
 
-main().catch((cause: unknown) => {
-  console.error(cause instanceof Error ? cause.message : String(cause));
-  process.exitCode = 1;
-});
+if (import.meta.main)
+  main().catch((cause: unknown) => {
+    console.error(cause instanceof Error ? cause.message : String(cause));
+    process.exitCode = 1;
+  });
