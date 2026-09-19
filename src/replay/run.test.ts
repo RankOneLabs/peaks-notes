@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { valueAfter } from "./cli";
@@ -103,6 +103,43 @@ test("fixture loading rejects manifest entries missing from the directory", asyn
   }
 });
 
+test("fixture loading rejects duplicate chunkId within a directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peaks-duplicate-chunk-"));
+  try {
+    const fixturesDir = join(directory, "fixtures");
+    await mkdir(fixturesDir);
+    const fixtureContent = await readFile(
+      "fixtures/deterministic/audit-timeout.json",
+      "utf8",
+    );
+    await writeFile(join(fixturesDir, "a.json"), fixtureContent, "utf8");
+    await writeFile(join(fixturesDir, "b.json"), fixtureContent, "utf8");
+
+    const manifest = JSON.parse(
+      await readFile("fixtures/manifest.json", "utf8"),
+    );
+    manifest.dev.directories.push(fixturesDir);
+    const label = {
+      file: "",
+      chunkId: "chunk-audit-timeout",
+      requiredCases: ["audit_inconclusive"],
+      requiresUpdate: false,
+    };
+    manifest.dev.fixtures.push(
+      { ...label, file: `${fixturesDir}/a.json` },
+      { ...label, file: `${fixturesDir}/b.json` },
+    );
+    const manifestPath = join(directory, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+
+    await expect(loadFixtures(fixturesDir, manifestPath)).rejects.toThrow(
+      "duplicate chunkId chunk-audit-timeout",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("CLI flags reject missing values", () => {
   expect(() => valueAfter(["--adapters"], "--adapters")).toThrow(
     "--adapters requires a value",
@@ -130,6 +167,67 @@ test("explicit active mode requires a sweep record", async () => {
       sweepRecordPath: "/tmp/peaks-missing-sweep-record.json",
     }),
   ).rejects.toThrow("active mode requires");
+});
+
+test("mode active asserts an active-authored fixture and fails on a wrong stub outcome", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "peaks-active-mismatch-"));
+  try {
+    const fixturesDir = join(directory, "fixtures");
+    await mkdir(fixturesDir);
+    const fixtureContent = JSON.parse(
+      await readFile(
+        "fixtures/deterministic/same-seed-audit-assignment.json",
+        "utf8",
+      ),
+    );
+    fixtureContent.expected = {
+      ...fixtureContent.expected,
+      status: "committed",
+    };
+    await writeFile(
+      join(fixturesDir, "same-seed-audit-assignment.json"),
+      JSON.stringify(fixtureContent),
+      "utf8",
+    );
+
+    const sweepRecordPath = join(directory, "sweep-record.json");
+    await writeFile(
+      sweepRecordPath,
+      JSON.stringify({
+        version: 2,
+        split: "dev",
+        chosenPolicy: fixtureContent.classifierPolicy,
+      }),
+      "utf8",
+    );
+
+    const manifest = JSON.parse(
+      await readFile("fixtures/manifest.json", "utf8"),
+    );
+    manifest.dev.directories.push(fixturesDir);
+    manifest.dev.fixtures.push({
+      file: `${fixturesDir}/same-seed-audit-assignment.json`,
+      chunkId: "chunk-sampled",
+      requiredCases: ["stable_audit_assignment"],
+      relevantTopicIds: ["topic-1"],
+      expectedRelationships: { "topic-1": "same_info" },
+      requiresUpdate: false,
+    });
+    const manifestPath = join(directory, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+
+    await expect(
+      runReplay({
+        fixtures: fixturesDir,
+        adapters: "stub",
+        mode: "active",
+        manifestPath,
+        sweepRecordPath,
+      }),
+    ).rejects.toThrow("expected committed, received no_update");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("archived journal replay loads labels, entries, and recorded assignments", async () => {

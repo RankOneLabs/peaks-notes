@@ -20,7 +20,8 @@ export class RecordedProvider implements GenerativeProvider {
   }
 
   async generate(request: GenerateRequest): Promise<GenerateResponse> {
-    this.requests.push(structuredClone(request));
+    const { signal: _signal, ...recorded } = request;
+    this.requests.push(structuredClone(recorded));
     const next = this.#responses.shift();
     if (next === undefined) throw new Error("recorded response not configured");
     if (next.delayMs !== undefined)

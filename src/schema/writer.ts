@@ -59,6 +59,21 @@ export const MemoryPatchSchema = z
   .strict();
 export type MemoryPatch = z.infer<typeof MemoryPatchSchema>;
 
+/** Writer-facing response shape: writers may add only active constraints and decisions. */
+export const WriterMemoryPatchSchema = MemoryPatchSchema.extend({
+  addProtected: z.array(
+    z
+      .object({
+        id: ProtectedRecordIdSchema,
+        kind: z.enum(["constraint", "decision"]),
+        text: z.string().min(1),
+        sources: z.array(SourceRefSchema).min(1),
+        status: z.literal("active"),
+      })
+      .strict(),
+  ),
+}).strict();
+
 /** Spec §6 prose: exceptional one-pass global compression request. */
 export const CompressInputSchema = z
   .object({
@@ -69,8 +84,11 @@ export const CompressInputSchema = z
   .strict();
 export type CompressInput = z.infer<typeof CompressInputSchema>;
 
+/** Lets the pipeline cancel a model call whose deadline has expired. */
+export type CallOptions = { signal?: AbortSignal };
+
 /** Spec §7 plus §6: writer owns both update proposals and exceptional compression. */
 export interface Writer {
-  propose(input: UpdateInput): Promise<MemoryPatch>;
-  compress(input: CompressInput): Promise<MemoryPatch>;
+  propose(input: UpdateInput, options?: CallOptions): Promise<MemoryPatch>;
+  compress(input: CompressInput, options?: CallOptions): Promise<MemoryPatch>;
 }

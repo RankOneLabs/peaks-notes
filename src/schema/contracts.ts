@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { SemanticComparisonSchema } from "./evaluation";
-import { MemoryPatchSchema } from "./writer";
+import { WriterMemoryPatchSchema } from "./writer";
 
 export type ResponseContract = {
   name: string;
@@ -184,7 +184,10 @@ const contract = (name: string, schema: z.ZodType): ResponseContract => ({
   >,
 });
 
-export const MemoryPatchContract = contract("MemoryPatch", MemoryPatchSchema);
+export const MemoryPatchContract = contract(
+  "MemoryPatch",
+  WriterMemoryPatchSchema,
+);
 export const SemanticComparisonContract = contract(
   "SemanticComparison",
   SemanticComparisonSchema,

@@ -45,3 +45,17 @@ describe("selectTopics", () => {
     );
   });
 });
+
+test("a score exactly at the relevance threshold is selected", () => {
+  const result = selectTopics(
+    [topic("a"), topic("b")],
+    {
+      topics: [
+        { topicId: "a" as never, score: 0.5 },
+        { topicId: "b" as never, score: 0.49 },
+      ],
+    },
+    policy,
+  );
+  expect(result.ok && result.value.map(({ id }) => String(id))).toEqual(["a"]);
+});

@@ -83,3 +83,26 @@ test("equal-ranked relations use the lowest confidence regardless of order", () 
     });
   }
 });
+
+test("confidence exactly at a threshold still bypasses", () => {
+  const route = (same: number, uncovered: number) => {
+    const result = decideRouting(
+      selected,
+      {
+        relations: [
+          {
+            topicId: "a" as never,
+            relationship: "same_info",
+            confidence: same,
+          },
+        ],
+        uncovered: { outcome: "none", confidence: uncovered },
+      },
+      policy,
+    );
+    return result.ok ? result.value.kind : "error";
+  };
+  expect(route(0.8, 0.8)).toBe("bypass");
+  expect(route(0.79, 0.8)).toBe("writer");
+  expect(route(0.8, 0.79)).toBe("writer");
+});

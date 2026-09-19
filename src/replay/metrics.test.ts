@@ -223,6 +223,48 @@ test("canonical call suppression is scoped by role, chunk, and attempt", () => {
   });
 });
 
+test("shadow bypass predictions are excluded from eligible audits and sampling probability", () => {
+  const base = {
+    occurredAt: "2026-09-18T00:00:00.000Z",
+    snapshotRevision: 0,
+  };
+  const activeAudit = (chunkId: string): JournalEntry => ({
+    ...base,
+    type: "audit_record",
+    id: `journal-${chunkId}` as never,
+    chunkId: chunkId as never,
+    policy: { mode: "active", bypassAuditRate: 1, auditSeed: "seed" },
+    sampled: true,
+    proposedBypass: true,
+    outcome: "empty_patch",
+  });
+  const shadowAudit = (chunkId: string): JournalEntry => ({
+    ...base,
+    type: "audit_record",
+    id: `journal-${chunkId}` as never,
+    chunkId: chunkId as never,
+    policy: { mode: "shadow", bypassAuditRate: 1, auditSeed: "seed" },
+    sampled: false,
+    proposedBypass: true,
+    outcome: "not_sampled",
+  });
+  const entries: JournalEntry[] = [
+    activeAudit("chunk-a"),
+    activeAudit("chunk-b"),
+    activeAudit("chunk-c"),
+    activeAudit("chunk-d"),
+    shadowAudit("chunk-e"),
+    shadowAudit("chunk-f"),
+  ];
+  const report = computeMetrics({ entries, labels: [], policy });
+  expect(report.audits).toMatchObject({
+    eligible: 4,
+    samplingProbability: 1,
+  });
+  expect(report.savings.potentialWriterCallsShadow).toBe(2);
+  expect(formatReport(report)).toContain("shadow-predictions=2");
+});
+
 test("route-less journals retain legacy classifier-policy behavior", () => {
   const labels = [label("legacy-no-update", "relevance")];
   const report = computeMetrics({

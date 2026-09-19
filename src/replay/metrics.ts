@@ -73,6 +73,8 @@ export type MetricsReport = {
     sampled: number;
     completed: number;
     failed: number;
+    /** Subset of failed; slow chunks time out first, which biases the miss estimate low. */
+    timedOut: number;
     samplingProbability: number | null;
   };
   model: {
@@ -239,6 +241,7 @@ export const computeMetrics = ({
   let eligible = 0;
   let sampled = 0;
   let completed = 0;
+  let timedOut = 0;
   let failed = 0;
   let probabilityTotal = 0;
   let potentialWriterCallsShadow = 0;
@@ -296,13 +299,17 @@ export const computeMetrics = ({
           true,
         );
     } else if (entry.type === "audit_record" && entry.proposedBypass) {
-      eligible += 1;
-      probabilityTotal += entry.policy.bypassAuditRate;
-      if (entry.policy.mode === "shadow") potentialWriterCallsShadow += 1;
-      else activeBypasses += 1;
+      if (entry.policy.mode === "active") {
+        eligible += 1;
+        probabilityTotal += entry.policy.bypassAuditRate;
+        activeBypasses += 1;
+      } else {
+        potentialWriterCallsShadow += 1;
+      }
       if (entry.sampled) {
         sampled += 1;
         auditOverheadCalls += 1;
+        if (entry.outcome === "timed_out") timedOut += 1;
         if (entry.outcome === "failed" || entry.outcome === "timed_out")
           failed += 1;
         else completed += 1;
@@ -424,6 +431,7 @@ export const computeMetrics = ({
       eligible,
       sampled,
       completed,
+      timedOut,
       failed,
       samplingProbability: ratio(probabilityTotal, eligible),
     },

@@ -197,7 +197,6 @@ test("OpenAI sends a strict-compatible schema and restores optional fields", asy
                         { messageId: "message-1", start: null, end: null },
                       ],
                       status: "active",
-                      supersededBy: null,
                     },
                   ],
                   supersedeProtected: [],
@@ -227,8 +226,8 @@ test("OpenAI sends a strict-compatible schema and restores optional fields", asy
           properties: {
             addProtected: {
               items: {
-                required: expect.arrayContaining(["supersededBy"]),
                 properties: {
+                  kind: { enum: ["constraint", "decision"] },
                   sources: {
                     items: {
                       required: ["messageId", "start", "end"],

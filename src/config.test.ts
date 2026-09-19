@@ -12,8 +12,16 @@ const valid = {
 test("loads typed defaults and pins Jev", () => {
   const config = loadConfig(valid);
   expect(config.jev.model).toBe("jev-1.13.0");
-  expect(config.writer.promptVersion).toBe("writer-v2");
+  expect(config.writer.promptVersion).toBe("writer-v3");
   expect(config.evaluator.apiKey).toBe("writer-secret");
+  expect(config.evaluation).toEqual({
+    auditDeadlineMs: 2_000,
+    shadowComparisonDeadlineMs: 2_000,
+  });
+  expect(
+    loadConfig({ ...valid, AUDIT_DEADLINE_MS: "5000" }).evaluation
+      .auditDeadlineMs,
+  ).toBe(5_000);
 });
 
 test("missing provider key fails startup and names the field", () => {

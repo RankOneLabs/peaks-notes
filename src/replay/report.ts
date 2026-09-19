@@ -26,7 +26,7 @@ export const formatReport = (report: MetricsReport): string =>
     `Protected-content losses: ${report.protectedContentLosses}`,
     `Missed critical updates: ${report.missedCriticalUpdates}`,
     `Semantic: equivalent=${report.semantic.equivalent}, material=${report.semantic.material}, required-update=${report.semantic.requiredUpdate}, writer-regression=${report.semantic.writerRegression}, inconclusive=${report.semantic.inconclusive}`,
-    `Audits: eligible=${report.audits.eligible}, sampled=${report.audits.sampled}, completed=${report.audits.completed}, failed=${report.audits.failed}, probability=${percent(report.audits.samplingProbability)}`,
+    `Audits: eligible=${report.audits.eligible}, sampled=${report.audits.sampled}, completed=${report.audits.completed}, failed=${report.audits.failed}, timed-out=${report.audits.timedOut} (${percent(report.audits.sampled === 0 ? 0 : report.audits.timedOut / report.audits.sampled)} of sampled), probability=${percent(report.audits.samplingProbability)}, shadow-predictions=${report.savings.potentialWriterCallsShadow}`,
     `Writer savings: shadow-potential=${report.savings.potentialWriterCallsShadow}, active-realized=${report.savings.realizedWriterCallsActive}, audit-overhead=${report.savings.auditOverheadCalls}`,
     `Tokens: classifier=${report.model.classifier.totalTokens}, writer=${report.model.writer.totalTokens}, evaluator=${report.model.evaluator.totalTokens}`,
     `Latency ms: classifier=${report.model.classifier.latencyMs.toFixed(1)}, writer=${report.model.writer.latencyMs.toFixed(1)}, evaluator=${report.model.evaluator.latencyMs.toFixed(1)}`,

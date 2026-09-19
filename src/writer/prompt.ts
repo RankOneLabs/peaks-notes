@@ -4,8 +4,9 @@ import {
   serializeResponseContract,
   type UpdateInput,
 } from "../schema";
+import { serializeData } from "./serialize_data";
 
-export const WRITER_PROMPT_VERSION = "writer-v2";
+export const WRITER_PROMPT_VERSION = "writer-v3";
 
 const rules = `Writer rules (Topic Compactor specification section 5D):
 1. Preserve existing relevant facts unless source evidence supports a change.
@@ -14,17 +15,14 @@ const rules = `Writer rules (Topic Compactor specification section 5D):
 4. Preserve unresolved uncertainty and both sides of unresolved conflicts.
 5. Preserve exact IDs, amounts, paths, constraints, and verbatim protected excerpts.
 6. Generate no tool actions; edit memory only.
-7. Update only affected sections and do not duplicate material across topics.`;
+7. Update only affected sections and do not duplicate material across topics.
+8. addProtected accepts only active "constraint" or "decision" records. Each text must be copied character for character from a message in the current transcript chunk, and every source must cite that message; if start/end are given, text must equal content.slice(start, end). Code creates pins and action receipts; never add them.`;
 
 const outputContract = `Return only one JSON object matching this versioned response contract:
 ${serializeResponseContract(MemoryPatchContract)}
-All four top-level arrays are required; use empty arrays when there are no entries. Existing-topic replacements require the exact topicId and expectedVersion. New-topic IDs and versions are assigned by code and therefore are absent. Every source is an object containing a real messageId and may include start/end offsets. Never invent source IDs.`;
+All four top-level arrays are required; use empty arrays when there are no entries. Existing-topic replacements require the exact topicId and expectedVersion. New-topic IDs and versions are assigned by code and therefore are absent. Every source is an object containing a real messageId and may include start/end offsets, half-open [start, end) into that message's content and only for messages in the current chunk. Never invent source IDs.`;
 
 export type Prompt = { system: string; user: string };
-
-/** JSON data cannot terminate the surrounding XML-like prompt delimiter. */
-const serializeData = (value: unknown): string =>
-  JSON.stringify(value).replaceAll("<", "\\u003c");
 
 const instructions = (
   task: string,

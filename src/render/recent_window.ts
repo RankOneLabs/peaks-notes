@@ -9,16 +9,13 @@ export const recentWindow = (
 ): Message[] => {
   if (messages.length <= count) return structuredClone([...messages]);
   let start = Math.max(0, messages.length - count);
-  let end = messages.length;
+  const end = messages.length;
 
-  const selectedCallIds = new Set<string>();
   let previousStart: number;
   do {
     previousStart = start;
     for (let index = start; index < end; index += 1) {
       const item = messages[index];
-      if (item !== undefined && "toolCall" in item)
-        selectedCallIds.add(item.toolCall.id);
       if (item !== undefined && "toolResult" in item) {
         const callIndex = messages.findIndex(
           (candidate) =>
@@ -29,12 +26,5 @@ export const recentWindow = (
       }
     }
   } while (start < previousStart);
-  for (const callId of selectedCallIds) {
-    const resultIndex = messages.findIndex(
-      (candidate) =>
-        "toolResult" in candidate && candidate.toolResult.callId === callId,
-    );
-    if (resultIndex >= end) end = resultIndex + 1;
-  }
   return structuredClone(messages.slice(start, end));
 };

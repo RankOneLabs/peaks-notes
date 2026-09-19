@@ -3,13 +3,10 @@ import {
   type SemanticComparisonInput,
   serializeResponseContract,
 } from "../schema";
+import { serializeData } from "../writer/serialize_data";
 import { buildSnapshotViews } from "./snapshot_diff";
 
 export const EVALUATOR_PROMPT_VERSION = "evaluator-v2";
-
-/** JSON data cannot terminate the surrounding XML-like prompt delimiter. */
-const serializeData = (value: unknown): string =>
-  JSON.stringify(value).replaceAll("<", "\\u003c");
 
 export const buildEvaluatorPrompt = (
   input: SemanticComparisonInput,

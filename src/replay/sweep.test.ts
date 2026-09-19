@@ -49,6 +49,7 @@ const metrics = (recall: number, misses: number): MetricsReport => ({
     sampled: 0,
     completed: 0,
     failed: 0,
+    timedOut: 0,
     samplingProbability: null,
   },
   model: {

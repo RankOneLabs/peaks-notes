@@ -71,6 +71,14 @@ const main = async (): Promise<void> => {
       "utf8",
     );
   console.log(report);
+  if (result.fixtures.length > 0)
+    console.log(
+      `Expectations: asserted=${result.assertions.asserted}/${result.fixtures.length}${
+        result.assertions.skipped.length === 0
+          ? ""
+          : `, skipped under overrides: ${result.assertions.skipped.join(", ")}`
+      }`,
+    );
 };
 
 if (import.meta.main)

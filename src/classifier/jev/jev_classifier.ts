@@ -12,13 +12,22 @@ import {
   normalizeRelationships,
   normalizeRelevance,
 } from "./normalize";
-import { relationshipQuestions, relevanceQuestions } from "./questions";
+import {
+  RELATIONSHIP_TEMPLATE_VERSION,
+  RELEVANCE_TEMPLATE_VERSION,
+  relationshipQuestions,
+  relevanceQuestions,
+} from "./questions";
 import type { JevRequest, JevResponse } from "./wire";
 import { JEV_MODEL } from "./wire";
 
+export const JEV_PROVIDER = "typesafe";
+
 export type JevCallTrace = {
   operation: "relevance" | "relationships";
+  provider: typeof JEV_PROVIDER;
   model: typeof JEV_MODEL;
+  promptVersion: string;
   requests: JevRequest[];
   answers: AnswerTrace[];
   usage: JevUsage;
@@ -41,9 +50,7 @@ export class JevClassifier implements Classifier {
   }
 
   getCalls(): JevCallTrace[] {
-    return this.#lastCall === undefined
-      ? []
-      : [structuredClone(this.#lastCall)];
+    return structuredClone(this.calls);
   }
 
   drainCalls(): JevCallTrace[] {
@@ -52,7 +59,15 @@ export class JevClassifier implements Classifier {
     return calls;
   }
 
-  #record(trace: JevCallTrace): void {
+  #record(call: Omit<JevCallTrace, "provider" | "promptVersion">): void {
+    const trace: JevCallTrace = {
+      ...call,
+      provider: JEV_PROVIDER,
+      promptVersion:
+        call.operation === "relationships"
+          ? RELATIONSHIP_TEMPLATE_VERSION
+          : RELEVANCE_TEMPLATE_VERSION,
+    };
     this.#lastCall = trace;
     this.calls.push(structuredClone(trace));
   }

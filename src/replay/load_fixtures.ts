@@ -160,7 +160,7 @@ export const loadFixtures = async (
     throw new Error(
       `manifest fixtures are missing from ${directory}: ${missing.join(", ")}`,
     );
-  return Promise.all(
+  const loaded = await Promise.all(
     files.map(async (file) => {
       const relative = `${normalizedDirectory}/${file}`;
       const label = byFile.get(relative);
@@ -176,6 +176,16 @@ export const loadFixtures = async (
       return { path: relative, fixture, label, split };
     }),
   );
+  const seenChunkIds = new Map<string, string>();
+  for (const { fixture, path } of loaded) {
+    const previous = seenChunkIds.get(fixture.chunk.id);
+    if (previous !== undefined)
+      throw new Error(
+        `duplicate chunkId ${fixture.chunk.id} in ${directory}: ${previous} and ${path}`,
+      );
+    seenChunkIds.set(fixture.chunk.id, path);
+  }
+  return loaded;
 };
 
 export const ArchivedJournalSchema = z

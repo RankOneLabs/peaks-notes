@@ -15,3 +15,11 @@ test("a different seed changes at least one assignment", () => {
     ids.some((id) => sampleAudit(id, "a", 0.5) !== sampleAudit(id, "b", 0.5)),
   ).toBe(true);
 });
+
+test("the sampled fraction tracks the configured rate", () => {
+  const ids = Array.from({ length: 4_000 }, (_, index) => `chunk-${index}`);
+  for (const rate of [0.1, 0.5]) {
+    const sampled = ids.filter((id) => sampleAudit(id, "seed", rate)).length;
+    expect(Math.abs(sampled / ids.length - rate)).toBeLessThan(0.03);
+  }
+});

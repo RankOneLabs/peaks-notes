@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ChunkSchema } from "./chunk";
 import { MemorySchema, SourceRefSchema } from "./memory";
 import { TaskContextSchema } from "./task";
+import type { CallOptions } from "./writer";
 
 /** Spec §5 semantic comparison: material before/after assessment. */
 export const SemanticComparisonSchema = z
@@ -40,5 +41,8 @@ export type SemanticComparisonInput = z.infer<
 >;
 
 export interface Evaluator {
-  compare(input: SemanticComparisonInput): Promise<SemanticComparison>;
+  compare(
+    input: SemanticComparisonInput,
+    options?: CallOptions,
+  ): Promise<SemanticComparison>;
 }
