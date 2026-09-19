@@ -31,6 +31,8 @@ export type GenerateRequest = {
   model: string;
   promptVersion: string;
   deadlineMs: number;
+  /** Caller cancellation; the provider aborts on this or its own deadline. */
+  signal?: AbortSignal;
   responseContract?: ResponseContract;
   /** @deprecated Use responseContract. */
   responseSchemaName?: string;
@@ -116,17 +118,44 @@ const AnthropicResponseSchema = z
   .passthrough();
 
 const withAbortDeadline = async <T>(
-  deadlineMs: number,
+  { deadlineMs, signal }: GenerateRequest,
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deadlineMs);
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, deadlineMs);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
   try {
     return await run(controller.signal);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
 };
+
+/** Rejects with AbortError once the request deadline or the caller's signal fires. */
+export const generateWithin = (
+  provider: GenerativeProvider,
+  request: GenerateRequest,
+): Promise<GenerateResponse> =>
+  new Promise((resolve, reject) => {
+    const expire = () =>
+      reject(new DOMException("deadline expired", "AbortError"));
+    if (request.signal?.aborted) {
+      expire();
+      return;
+    }
+    const timer = setTimeout(expire, request.deadlineMs);
+    request.signal?.addEventListener("abort", expire, { once: true });
+    provider
+      .generate(request)
+      .then(resolve, reject)
+      .finally(() => {
+        clearTimeout(timer);
+        request.signal?.removeEventListener("abort", expire);
+      });
+  });
 
 export const createProvider = (
   config: ModelAdapterConfig,
@@ -136,43 +165,40 @@ export const createProvider = (
     return {
       id: "openai",
       async generate(request) {
-        const raw = await withAbortDeadline(
-          request.deadlineMs,
-          async (signal) => {
-            const response = await fetchImplementation(
-              config.endpoint ?? "https://api.openai.com/v1/responses",
-              {
-                method: "POST",
-                signal,
-                headers: {
-                  Authorization: `Bearer ${config.apiKey}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  model: request.model,
-                  instructions: request.system,
-                  input: request.user,
-                  store: false,
-                  text:
-                    request.responseContract === undefined
-                      ? { format: { type: "json_object" } }
-                      : {
-                          format: {
-                            type: "json_schema",
-                            name: request.responseContract.name,
-                            strict: true,
-                            schema: openAIStrictResponseSchema(
-                              request.responseContract.schema,
-                            ),
-                          },
-                        },
-                }),
+        const raw = await withAbortDeadline(request, async (signal) => {
+          const response = await fetchImplementation(
+            config.endpoint ?? "https://api.openai.com/v1/responses",
+            {
+              method: "POST",
+              signal,
+              headers: {
+                Authorization: `Bearer ${config.apiKey}`,
+                "Content-Type": "application/json",
               },
-            );
-            if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
-            return readJson(response);
-          },
-        );
+              body: JSON.stringify({
+                model: request.model,
+                instructions: request.system,
+                input: request.user,
+                store: false,
+                text:
+                  request.responseContract === undefined
+                    ? { format: { type: "json_object" } }
+                    : {
+                        format: {
+                          type: "json_schema",
+                          name: request.responseContract.name,
+                          strict: true,
+                          schema: openAIStrictResponseSchema(
+                            request.responseContract.schema,
+                          ),
+                        },
+                      },
+              }),
+            },
+          );
+          if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
+          return readJson(response);
+        });
         const body = OpenAIResponseSchema.parse(raw);
         const inputTokens = body.usage.input_tokens;
         const outputTokens = body.usage.output_tokens;
@@ -199,44 +225,40 @@ export const createProvider = (
   return {
     id: "anthropic",
     async generate(request) {
-      const raw = await withAbortDeadline(
-        request.deadlineMs,
-        async (signal) => {
-          const response = await fetchImplementation(
-            config.endpoint ?? "https://api.anthropic.com/v1/messages",
-            {
-              method: "POST",
-              signal,
-              headers: {
-                "x-api-key": config.apiKey,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: request.model,
-                max_tokens: 8192,
-                system: request.system,
-                messages: [{ role: "user", content: request.user }],
-                ...(request.responseContract === undefined
-                  ? {}
-                  : {
-                      output_config: {
-                        format: {
-                          type: "json_schema",
-                          schema: anthropicResponseSchema(
-                            request.responseContract.schema,
-                          ),
-                        },
-                      },
-                    }),
-              }),
+      const raw = await withAbortDeadline(request, async (signal) => {
+        const response = await fetchImplementation(
+          config.endpoint ?? "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            signal,
+            headers: {
+              "x-api-key": config.apiKey,
+              "anthropic-version": "2023-06-01",
+              "Content-Type": "application/json",
             },
-          );
-          if (!response.ok)
-            throw new Error(`Anthropic HTTP ${response.status}`);
-          return readJson(response);
-        },
-      );
+            body: JSON.stringify({
+              model: request.model,
+              max_tokens: 8192,
+              system: request.system,
+              messages: [{ role: "user", content: request.user }],
+              ...(request.responseContract === undefined
+                ? {}
+                : {
+                    output_config: {
+                      format: {
+                        type: "json_schema",
+                        schema: anthropicResponseSchema(
+                          request.responseContract.schema,
+                        ),
+                      },
+                    },
+                  }),
+            }),
+          },
+        );
+        if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}`);
+        return readJson(response);
+      });
       const body = AnthropicResponseSchema.parse(raw);
       const inputTokens = body.usage.input_tokens;
       const outputTokens = body.usage.output_tokens;

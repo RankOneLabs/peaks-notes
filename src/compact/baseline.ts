@@ -1,4 +1,5 @@
 import type {
+  CallOptions,
   Chunk,
   Memory,
   MemoryPatch,
@@ -12,10 +13,14 @@ export const runBaseline = async (
   chunk: Chunk,
   memory: Memory,
   taskContext: TaskContext,
+  options?: CallOptions,
 ): Promise<MemoryPatch> =>
-  writer.propose({
-    chunk,
-    memory,
-    taskContext,
-    affectedTopicIds: memory.topics.map(({ id }) => id),
-  });
+  writer.propose(
+    {
+      chunk,
+      memory,
+      taskContext,
+      affectedTopicIds: memory.topics.map(({ id }) => id),
+    },
+    options,
+  );

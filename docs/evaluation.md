@@ -30,6 +30,8 @@ The sweep minimizes protected/critical losses and false no-updates first, then m
 bun run replay --fixtures fixtures/semantic --adapters stub --mode active --policy-record fixtures/sweep-record.json
 ```
 
+Fixture expectations are asserted whenever the effective mode, execution policy, and classifier policy equal the ones the fixture was authored with; the final `Expectations:` line reports how many were asserted and names the ones skipped. A swept policy that differs from the authored thresholds therefore skips assertions, because the authored outcome no longer applies.
+
 Never use `fixtures/held_out` in a sweep or other tuning command. Evaluate it only after choosing and recording the policy.
 
 The sweep-record gate applies when the CLI explicitly requests `--mode active`. Fixtures may declare `executionPolicy.mode: "active"` and run as authored without a sweep record; this exception is limited to deterministic harness cases that exercise active routing and audit behavior.
@@ -40,4 +42,4 @@ Relevance recall is the primary routing metric; precision and selected topics pe
 
 Semantic counts distinguish equivalence, source-supported required updates, writer regressions, and inconclusive comparisons. Inconclusive results are excluded from both agreement and confirmed-miss denominators. The spot-check list includes labeled equivalent and material verdicts.
 
-Audit totals show eligible, sampled, completed, and failed decisions plus the mean configured sampling probability. Shadow savings are potential writer calls only; active savings subtract sampled audit writer calls. Token and latency totals are split among classifier, writer, and evaluator. Jev cost uses the documented input-only rate of $0.042 per million tokens; writer and evaluator token counts remain separate because their provider prices are deployment configuration.
+Audit totals count active-mode bypasses only: eligible, sampled, completed, failed, and timed-out decisions plus the mean configured sampling probability. Shadow would-be bypasses are never sampled and appear separately as `shadow-predictions`. Inline audits run under `AUDIT_DEADLINE_MS` and shadow comparisons under `SHADOW_COMPARISON_DEADLINE_MS` (both default 2000, deliberately far below the writer deadline); slow chunks time out first, so a high timed-out share biases the miss estimate low. Shadow savings are potential writer calls only; active savings subtract sampled audit writer calls. Token and latency totals are split among classifier, writer, and evaluator. Jev cost uses the documented input-only rate of $0.042 per million tokens; writer and evaluator token counts remain separate because their provider prices are deployment configuration.

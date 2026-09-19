@@ -1,4 +1,5 @@
 import {
+  type CallOptions,
   type Evaluator,
   type SemanticComparison,
   SemanticComparisonContract,
@@ -8,6 +9,7 @@ import {
   AdapterError,
   estimateModelTokens,
   type GenerativeProvider,
+  generateWithin,
   type ModelAdapterConfig,
   type ModelCall,
 } from "../writer/provider";
@@ -17,7 +19,10 @@ import { memorySemanticallyEqual } from "./snapshot_diff";
 
 export class LlmEvaluator implements Evaluator {
   #lastCall: ModelCall | undefined;
-  #activeCall: { startedAt: number; call: ModelCall } | undefined;
+  readonly #activeCalls = new Map<
+    AbortSignal | undefined,
+    { startedAt: number; call: ModelCall }
+  >();
   readonly #callsByResult = new WeakMap<SemanticComparison, ModelCall>();
   constructor(
     readonly provider: GenerativeProvider,
@@ -35,15 +40,14 @@ export class LlmEvaluator implements Evaluator {
     return call === undefined ? undefined : structuredClone(call);
   }
 
-  getActiveCall(): ModelCall | undefined {
-    return this.#activeCall === undefined
+  /** The in-flight call started under `signal`; concurrent operations stay separate. */
+  getActiveCall(signal?: AbortSignal): ModelCall | undefined {
+    const active = this.#activeCalls.get(signal);
+    return active === undefined
       ? undefined
       : {
-          ...structuredClone(this.#activeCall.call),
-          latencyMs: Math.max(
-            0,
-            performance.now() - this.#activeCall.startedAt,
-          ),
+          ...structuredClone(active.call),
+          latencyMs: Math.max(0, performance.now() - active.startedAt),
         };
   }
 
@@ -53,7 +57,11 @@ export class LlmEvaluator implements Evaluator {
     return result;
   }
 
-  async compare(input: SemanticComparisonInput): Promise<SemanticComparison> {
+  async compare(
+    input: SemanticComparisonInput,
+    options?: CallOptions,
+  ): Promise<SemanticComparison> {
+    const signal = options?.signal;
     if (memorySemanticallyEqual(input.before, input.after)) {
       const result: SemanticComparison = {
         verdict: "equivalent",
@@ -97,28 +105,16 @@ export class LlmEvaluator implements Evaluator {
         this.#lastCall,
       );
     }
+    const active = { startedAt, call: call(0, true, "unknown") };
     try {
-      this.#activeCall = {
-        startedAt,
-        call: call(0, true, "unknown"),
-      };
-      const response = await new Promise<
-        Awaited<ReturnType<GenerativeProvider["generate"]>>
-      >((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new DOMException("deadline expired", "AbortError")),
-          this.config.deadlineMs,
-        );
-        this.provider
-          .generate({
-            ...prompt,
-            model: this.config.model,
-            promptVersion: EVALUATOR_PROMPT_VERSION,
-            deadlineMs: this.config.deadlineMs,
-            responseContract: SemanticComparisonContract,
-          })
-          .then(resolve, reject)
-          .finally(() => clearTimeout(timer));
+      this.#activeCalls.set(signal, active);
+      const response = await generateWithin(this.provider, {
+        ...prompt,
+        model: this.config.model,
+        promptVersion: EVALUATOR_PROMPT_VERSION,
+        deadlineMs: this.config.deadlineMs,
+        responseContract: SemanticComparisonContract,
+        ...(signal === undefined ? {} : { signal }),
       });
       const completedCall: ModelCall = {
         provider: this.provider.id,
@@ -129,7 +125,8 @@ export class LlmEvaluator implements Evaluator {
         dispatched: true,
         usageProvenance: "reported",
       };
-      this.#activeCall = undefined;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       try {
         const result = parseSemanticComparison(response.text);
         return this.#record(result, completedCall);
@@ -143,15 +140,18 @@ export class LlmEvaluator implements Evaluator {
         );
       }
     } catch (cause) {
-      this.#activeCall = undefined;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       if (cause instanceof AdapterError) throw cause;
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
-      this.#lastCall = call(0, true, timedOut ? "unknown" : "estimated");
+      const failedCall = call(0, true, timedOut ? "unknown" : "estimated");
+      // A cancelled call may settle during a later call; leave that call's state alone.
+      if (signal?.aborted !== true) this.#lastCall = failedCall;
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut ? "evaluator deadline expired" : "evaluator provider failed",
-        this.#lastCall,
+        failedCall,
         cause,
       );
     }

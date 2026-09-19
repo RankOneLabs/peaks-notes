@@ -66,14 +66,14 @@ export const AssessmentSchema = z
         .object({
           topicId: TopicIdSchema,
           relationship: RelationshipSchema,
-          confidence: z.number().finite(),
+          confidence: z.number().min(0).max(1),
         })
         .strict(),
     ),
     uncovered: z
       .object({
         outcome: z.enum(["none", "new_topic", "transient", "uncertain"]),
-        confidence: z.number().finite(),
+        confidence: z.number().min(0).max(1),
       })
       .strict(),
   })

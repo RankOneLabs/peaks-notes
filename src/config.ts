@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  DEFAULT_AUDIT_DEADLINE_MS,
+  DEFAULT_SHADOW_COMPARISON_DEADLINE_MS,
+} from "./compact/modes";
 import { EVALUATOR_PROMPT_VERSION } from "./evaluator/prompt";
 import { WRITER_PROMPT_VERSION } from "./writer/prompt";
 
@@ -32,6 +36,13 @@ export const AppConfigSchema = z
         deadlineMs: PositiveMillisecondsSchema,
         maxInputTokens: z.number().int().positive(),
         contextTokens: z.number().int().positive(),
+      })
+      .strict(),
+    /** Inline evaluation deadlines; deliberately far shorter than the writer's. */
+    evaluation: z
+      .object({
+        auditDeadlineMs: PositiveMillisecondsSchema,
+        shadowComparisonDeadlineMs: PositiveMillisecondsSchema,
       })
       .strict(),
   })
@@ -174,6 +185,18 @@ export const loadConfig = (
       ),
       contextTokens: Number(
         optional(environment, "JEV_CONTEXT_TOKENS", "64000"),
+      ),
+    },
+    evaluation: {
+      auditDeadlineMs: optional(
+        environment,
+        "AUDIT_DEADLINE_MS",
+        String(DEFAULT_AUDIT_DEADLINE_MS),
+      ),
+      shadowComparisonDeadlineMs: optional(
+        environment,
+        "SHADOW_COMPARISON_DEADLINE_MS",
+        String(DEFAULT_SHADOW_COMPARISON_DEADLINE_MS),
       ),
     },
   };

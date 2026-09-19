@@ -6,7 +6,7 @@ import {
   TopicIdSchema,
 } from "./ids";
 
-/** Spec §4: exact source span supporting stored state. */
+/** Spec §4: exact source span supporting stored state; `[start, end)` is half-open. */
 export const SourceRefSchema = z
   .object({
     messageId: MessageIdSchema,
@@ -22,6 +22,10 @@ export const SourceRefSchema = z
     {
       message: "source start must not exceed end",
     },
+  )
+  .refine(
+    (value) => (value.start === undefined) === (value.end === undefined),
+    { message: "source start and end must be given together" },
   );
 export type SourceRef = z.infer<typeof SourceRefSchema>;
 
@@ -55,6 +59,12 @@ export const ProtectedRecordSchema = z
       context.addIssue({
         code: "custom",
         message: "an active record cannot be superseded",
+      });
+    }
+    if (record.status === "superseded" && record.supersededBy === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "a superseded record must name its successor",
       });
     }
   });

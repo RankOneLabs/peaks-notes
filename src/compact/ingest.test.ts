@@ -573,7 +573,7 @@ test("failed audited writer requests emit canonical call events", async () => {
       apiKey: "unused",
       model: "audit-writer",
       deadlineMs: 100,
-      promptVersion: "writer-v2",
+      promptVersion: "writer-v3",
       maxInputTokens: 32_000,
     },
   );
@@ -614,7 +614,7 @@ test("timed-out audited writer requests emit canonical call events", async () =>
       apiKey: "unused",
       model: "audit-writer",
       deadlineMs: 2,
-      promptVersion: "writer-v2",
+      promptVersion: "writer-v3",
       maxInputTokens: 32_000,
     },
   );
@@ -1242,7 +1242,7 @@ test("writer records cannot replace deterministic protections", async () => {
             {
               id: protectedId as never,
               kind: "constraint",
-              text: "writer replacement",
+              text: firstMessage.content,
               sources: [{ messageId: firstMessage.id }],
               status: "active",
             },
@@ -1268,6 +1268,57 @@ test("writer records cannot replace deterministic protections", async () => {
     gate: "patch",
     reason: expect.stringContaining("collides"),
   });
+});
+
+test("fabricated writer protected text is rejected while deterministic pins commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "explicit preservation instruction",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const firstMessage = fixture.chunk.messages[0];
+  if (firstMessage === undefined) throw new Error("fixture message missing");
+  const run = async (text: string) => {
+    const store = new MemoryStore(fixture.initialMemory);
+    const result = await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: new StubClassifier(),
+      writer: new StubWriter({
+        proposals: [
+          {
+            output: {
+              replacements: [],
+              newTopics: [],
+              addProtected: [
+                {
+                  id: "writer-constraint" as never,
+                  kind: "constraint",
+                  text,
+                  sources: [{ messageId: firstMessage.id }],
+                  status: "active",
+                },
+              ],
+              supersedeProtected: [],
+            },
+          },
+        ],
+      }),
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: fixture.executionPolicy,
+    });
+    return { store, result };
+  };
+  const fabricated = await run("the user never said this");
+  expect(fabricated.result.status).toBe("retained");
+  expect(fabricated.store.memory.protected).toHaveLength(0);
+  expect(
+    fabricated.store.journal.find(({ type }) => type === "gate_decision"),
+  ).toMatchObject({ reason: expect.stringContaining("not verbatim") });
+  const verbatim = await run(firstMessage.content);
+  expect(verbatim.result.status).toBe("committed");
+  expect(verbatim.store.memory.protected.map(({ kind }) => kind)).toEqual([
+    "explicit_pin",
+    "constraint",
+  ]);
 });
 
 class FailingJournalStore extends MemoryStore {
@@ -1425,5 +1476,269 @@ test("baseline gate journals record baseline as the effective mode", async () =>
     type: "gate_decision",
     gate: "writer",
     effectiveMode: "baseline",
+  });
+});
+
+const bypassFixture = () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  return fixture;
+};
+const writerConfig = {
+  provider: "openai" as const,
+  apiKey: "unused",
+  model: "writer",
+  deadlineMs: 1_000,
+  promptVersion: "writer-v3",
+  maxInputTokens: 32_000,
+};
+const emptyPatchText = JSON.stringify({
+  replacements: [],
+  newTopics: [],
+  addProtected: [],
+  supersedeProtected: [],
+});
+const usage = (inputTokens: number) => ({
+  inputTokens,
+  outputTokens: 1,
+  totalTokens: inputTokens + 1,
+});
+
+test("a deadline aborts the audit call and leaves later call records alone", async () => {
+  const fixture = bypassFixture();
+  const signals: Array<AbortSignal | undefined> = [];
+  const writer = new LlmWriter(
+    {
+      id: "slow-then-fast",
+      generate: (request) => {
+        signals.push(request.signal);
+        return signals.length === 1
+          ? new Promise(() => {})
+          : Promise.resolve({
+              text: emptyPatchText,
+              usage: usage(7),
+              model: "second-call",
+            });
+      },
+    },
+    writerConfig,
+  );
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    auditDeadlineMs: 5,
+    attemptIdFactory: () => "aborted-audit",
+  });
+  expect(signals[0]?.aborted).toBe(true);
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "model_call",
+      id: expect.stringContaining("model-writer-audit-propose"),
+      status: "timed_out",
+      usageProvenance: "unknown",
+    }),
+  );
+  expect(writer.getActiveCall()).toBeUndefined();
+  expect(writer.getLastCall()).toBeUndefined();
+
+  await writer.propose({
+    chunk: fixture.chunk,
+    memory: fixture.initialMemory,
+    taskContext: fixture.taskContext,
+    affectedTopicIds: [],
+  });
+  await new Promise((done) => setTimeout(done, 5));
+  expect(writer.getLastCall()).toMatchObject({
+    model: "second-call",
+    usage: usage(7),
+  });
+});
+
+const longTokenizer = {
+  count: (text: string) => ({
+    tokens: text.includes("LONG") ? 100 : 1,
+    method: "target_tokenizer" as const,
+  }),
+};
+const budget = {
+  maxTokens: 1_000,
+  summaryBudgetTokens: 10,
+  tokenizer: longTokenizer,
+  rawMessages: [],
+};
+const replaceNetwork = (summary: string, expectedVersion = 1) =>
+  JSON.stringify({
+    replacements: [
+      {
+        topicId: "topic-1",
+        expectedVersion,
+        title: "Network",
+        description: "Network facts",
+        summary,
+        sources: [{ messageId: "message-old" }],
+        unresolved: [],
+      },
+    ],
+    newTopics: [],
+    addProtected: [],
+    supersedeProtected: [],
+  });
+
+test("a compression timeout journals the compress call, not the earlier propose", async () => {
+  const fixture = bypassFixture();
+  let calls = 0;
+  const writer = new LlmWriter(
+    {
+      id: "propose-then-hang",
+      generate: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve({
+              text: replaceNetwork("LONG network notes"),
+              usage: usage(40),
+              model: "writer",
+            })
+          : new Promise(() => {});
+      },
+    },
+    writerConfig,
+  );
+  const store = new MemoryStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+    mode: "baseline",
+    budget: { ...budget, compressionDeadlineMs: 5 },
+    attemptIdFactory: () => "compress-timeout",
+  });
+  expect(result.status).toBe("retained");
+  const modelCalls = store.journal.filter(({ type }) => type === "model_call");
+  expect(modelCalls).toHaveLength(2);
+  expect(modelCalls[0]).toMatchObject({
+    operation: "propose",
+    status: "succeeded",
+    usage: usage(40),
+  });
+  expect(modelCalls[1]).toMatchObject({
+    operation: "compress",
+    status: "timed_out",
+    usageProvenance: "unknown",
+  });
+  expect(modelCalls[1]).not.toHaveProperty("usage");
+});
+
+test("a bypass that compresses is still audited before it commits", async () => {
+  const fixture = bypassFixture();
+  const memory = structuredClone(fixture.initialMemory);
+  const topic = memory.topics[0];
+  if (topic === undefined) throw new Error("fixture topic missing");
+  topic.summary = "LONG LAN only.";
+  const writer = new LlmWriter(
+    new RecordedProvider(
+      [
+        replaceNetwork("LAN only."),
+        replaceNetwork("LONG audited rewrite"),
+        replaceNetwork("Audited rewrite.", 2),
+      ].map((text, index) => ({
+        response: { text, usage: usage(10 + index), model: "writer" },
+      })),
+    ),
+    writerConfig,
+  );
+  const store = new MemoryStore(memory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    budget,
+    attemptIdFactory: () => "audited-compression",
+  });
+  expect(result.status).toBe("committed");
+  expect(store.memory.topics[0]?.summary).toBe("LAN only.");
+  const audits = store.journal.filter(({ type }) => type === "audit_record");
+  expect(audits).toHaveLength(1);
+  expect(audits[0]).toMatchObject({ sampled: true, outcome: "patch" });
+  const ids = store.journal.map(({ id }) => id);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(
+    store.journal
+      .filter(({ type }) => type === "model_call")
+      .map(({ id }) => id.replace(/^.*-model-/, "")),
+  ).toEqual([
+    "writer-compress",
+    "writer-audit-compress",
+    "writer-audit-propose",
+  ]);
+});
+
+const storageError = (operation: string) =>
+  err({
+    code: "storage_error" as const,
+    operation,
+    message: `${operation} unavailable`,
+  });
+
+test.each(["archive", "load", "commit"] as const)(
+  "a failing store %s retains the chunk",
+  async (operation) => {
+    const fixture = bypassFixture();
+    const store = new MemoryStore(fixture.initialMemory);
+    store[operation] = async () => storageError(operation);
+    const result = await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: new StubClassifier(),
+      writer: new StubWriter({ proposals: fixture.stubs.proposals }),
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: fixture.executionPolicy,
+      mode: "baseline",
+    });
+    expect(result).toMatchObject({
+      status: "retained",
+      reason: expect.stringContaining(`${operation} unavailable`),
+    });
+    expect(store.commits).toHaveLength(0);
+  },
+);
+
+test("a timed-out writer call that cannot be journaled retains the chunk", async () => {
+  const fixture = bypassFixture();
+  const store = new MemoryStore(fixture.initialMemory);
+  const appendJournal = store.appendJournal.bind(store);
+  store.appendJournal = async (entry) =>
+    entry.type === "model_call"
+      ? storageError("appendJournal")
+      : appendJournal(entry);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer: new LlmWriter(
+      { id: "never", generate: () => new Promise(() => {}) },
+      writerConfig,
+    ),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+    mode: "baseline",
+    writerDeadlineMs: 5,
+  });
+  expect(result).toMatchObject({
+    status: "retained",
+    reason: expect.stringContaining("writer call journal failed"),
   });
 });

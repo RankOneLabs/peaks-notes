@@ -27,8 +27,10 @@ import type {
 } from "../schema";
 import {
   AssessmentSchema,
+  err,
   JournalEntryIdSchema,
   ModelIdentifierSchema,
+  ok,
   RelevanceResultSchema,
   SemanticComparisonSchema,
   UsageSchema,
@@ -94,7 +96,10 @@ const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
   return parsed.success ? parsed.data : undefined;
 };
 
-const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
+const activeAdapterCall = (
+  adapter: unknown,
+  signal: AbortSignal,
+): AdapterCall | undefined => {
   if (
     typeof adapter !== "object" ||
     adapter === null ||
@@ -102,7 +107,7 @@ const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
     typeof adapter.getActiveCall !== "function"
   )
     return undefined;
-  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall());
+  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall(signal));
   return parsed.success ? parsed.data : undefined;
 };
 
@@ -137,34 +142,65 @@ const adapterCallFor = (
   return undefined;
 };
 
+/** Captures the adapter's in-flight call before the deadline aborts it. */
+const withAdapterDeadline = async <T>(
+  adapter: unknown,
+  operation: (signal: AbortSignal) => Promise<T>,
+  deadlineMs: number,
+): Promise<
+  | { status: "completed"; value: T }
+  | { status: "timed_out"; call: AdapterCall | undefined }
+> => {
+  let call: AdapterCall | undefined;
+  const result = await withDeadline(operation, deadlineMs, (signal) => {
+    call = activeAdapterCall(adapter, signal);
+  });
+  return result.status === "timed_out" ? { status: "timed_out", call } : result;
+};
+
 const modelIdentifier = (call: AdapterCall): ModelIdentifier => ({
   provider: call.provider,
   model: call.model,
   promptVersion: call.promptVersion,
 });
 
-type JevTrace = {
-  operation: "relevance" | "relationships";
-  model: string;
-  requests: unknown[];
-  requestUsage: Array<{
-    inputTokens: number;
-    outputTokens: number;
-    latencyMs: number;
-  }>;
-  requestStatuses?: Array<"succeeded" | "failed" | "timed_out">;
-};
+/** Provider-neutral view of a classifier adapter's drained call traces. */
+const ClassifierTraceSchema = z.object({
+  operation: z.enum(["relevance", "relationships"]),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  promptVersion: z.string().min(1),
+  requestUsage: z.array(
+    z.object({
+      inputTokens: z.number().int().nonnegative(),
+      outputTokens: z.number().int().nonnegative(),
+      latencyMs: z.number().nonnegative(),
+    }),
+  ),
+  requestStatuses: z
+    .array(z.enum(["succeeded", "failed", "timed_out"]))
+    .optional(),
+});
+type ClassifierTrace = z.infer<typeof ClassifierTraceSchema>;
 
-const drainClassifierCalls = (classifier: unknown): JevTrace[] => {
+const drainClassifierCalls = (
+  classifier: unknown,
+): Result<ClassifierTrace[], string> => {
   if (
     typeof classifier !== "object" ||
     classifier === null ||
     !("drainCalls" in classifier) ||
     typeof classifier.drainCalls !== "function"
   )
-    return [];
-  const calls = classifier.drainCalls();
-  return Array.isArray(calls) ? (calls as JevTrace[]) : [];
+    return ok([]);
+  const parsed = z
+    .array(ClassifierTraceSchema)
+    .safeParse(classifier.drainCalls());
+  return parsed.success
+    ? ok(parsed.data)
+    : err(
+        `malformed classifier call trace: ${schemaMessage(parsed.error.issues)}`,
+      );
 };
 
 export type IngestDependencies = {
@@ -242,8 +278,9 @@ const appendClassifierCalls = async (
   memory: Memory,
 ): Promise<string | undefined> => {
   const traces = drainClassifierCalls(dependencies.classifier);
+  if (!traces.ok) return traces.error;
   let ordinal = 0;
-  for (const trace of traces) {
+  for (const trace of traces.value) {
     for (const [requestIndex, usage] of trace.requestUsage.entries()) {
       ordinal += 1;
       const result = await dependencies.store.appendJournal({
@@ -257,12 +294,9 @@ const appendClassifierCalls = async (
         role: "classifier",
         operation: trace.operation,
         status: trace.requestStatuses?.[requestIndex] ?? "succeeded",
-        provider: "typesafe",
+        provider: trace.provider,
         model: trace.model,
-        promptVersion:
-          trace.operation === "relationships"
-            ? "relationship-v2"
-            : "relevance-v1",
+        promptVersion: trace.promptVersion,
         latencyMs: usage.latencyMs,
         usage: {
           inputTokens: usage.inputTokens,
@@ -290,6 +324,7 @@ const appendAdapterCall = async (
   operation: "propose" | "compress" | "compare",
   call: AdapterCall | undefined,
   status: "succeeded" | "failed" | "timed_out" = "succeeded",
+  label: string = operation,
 ): Promise<string | undefined> => {
   if (call === undefined) return undefined;
   if (call.dispatched === false) return undefined;
@@ -299,7 +334,7 @@ const appendAdapterCall = async (
     call.latencyMs === 0
   )
     return undefined;
-  const suffix = `model-${role}-${operation}`;
+  const suffix = `model-${role}-${label}`;
   const result = await dependencies.store.appendJournal({
     type: "model_call",
     id: journalId(chunk, attempt, suffix),
@@ -307,7 +342,7 @@ const appendAdapterCall = async (
     chunkId: chunk.id,
     snapshotRevision: memory.revision,
     attemptId: attempt.id,
-    callId: `${chunk.id}:${attempt.id}:${role}:${operation}`,
+    callId: `${chunk.id}:${attempt.id}:${role}:${label}`,
     role,
     operation,
     status,
@@ -507,47 +542,49 @@ const appendSemanticComparison = async (
   }
 
   const startedAt = performance.now();
-  const operation = Promise.resolve()
-    .then(() =>
-      evaluator.compare({
-        before: structuredClone(memory),
-        after: structuredClone(after),
-        chunk: structuredClone(chunk),
-        taskContext: structuredClone(taskContext),
-      }),
-    )
-    .then(
-      (value) => {
-        const evaluatorCall = adapterCallFor(evaluator, value);
-        const parsed = SemanticComparisonSchema.safeParse(value);
-        return parsed.success
-          ? {
-              type: "comparison" as const,
-              value: parsed.data,
-              evaluatorCall,
-            }
-          : {
-              type: "invalid_response" as const,
-              reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
-              evaluatorCall,
-            };
-      },
-      (cause: unknown) => {
-        const type = adapterFailureType(cause);
-        const failure = {
-          reason: `semantic comparison failed: ${message(cause)}`,
-          evaluatorCall: adapterCallFromCause(cause),
-        };
-        return type === "timed_out"
-          ? { type: "timed_out" as const, ...failure }
-          : { type: "failed" as const, ...failure };
-      },
-    );
-  const result = await withDeadline(operation, deadlineMs);
+  const operation = (signal: AbortSignal) =>
+    Promise.resolve()
+      .then(() =>
+        evaluator.compare(
+          {
+            before: structuredClone(memory),
+            after: structuredClone(after),
+            chunk: structuredClone(chunk),
+            taskContext: structuredClone(taskContext),
+          },
+          { signal },
+        ),
+      )
+      .then(
+        (value) => {
+          const evaluatorCall = adapterCallFor(evaluator, value);
+          const parsed = SemanticComparisonSchema.safeParse(value);
+          return parsed.success
+            ? {
+                type: "comparison" as const,
+                value: parsed.data,
+                evaluatorCall,
+              }
+            : {
+                type: "invalid_response" as const,
+                reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
+                evaluatorCall,
+              };
+        },
+        (cause: unknown) => {
+          const type = adapterFailureType(cause);
+          const failure = {
+            reason: `semantic comparison failed: ${message(cause)}`,
+            evaluatorCall: adapterCallFromCause(cause),
+          };
+          return type === "timed_out"
+            ? { type: "timed_out" as const, ...failure }
+            : { type: "failed" as const, ...failure };
+        },
+      );
+  const result = await withAdapterDeadline(evaluator, operation, deadlineMs);
   const evaluatorCall =
-    result.status === "timed_out"
-      ? activeAdapterCall(evaluator)
-      : result.value.evaluatorCall;
+    result.status === "timed_out" ? result.call : result.value.evaluatorCall;
   const callFailure = await appendAdapterCall(
     dependencies,
     attempt,
@@ -681,32 +718,37 @@ const appendAudit = async (
   let auditWriterCall: AdapterCall | undefined;
   if (sampled) {
     const deadline = dependencies.auditDeadlineMs ?? DEFAULT_AUDIT_DEADLINE_MS;
-    const result = await withDeadline(
-      Promise.resolve()
-        .then(() =>
-          dependencies.writer.propose({
-            chunk,
-            memory: structuredClone(memory),
-            taskContext,
-            affectedTopicIds: memory.topics.map(({ id }) => id),
+    const result = await withAdapterDeadline(
+      dependencies.writer,
+      (signal) =>
+        Promise.resolve()
+          .then(() =>
+            dependencies.writer.propose(
+              {
+                chunk,
+                memory: structuredClone(memory),
+                taskContext,
+                affectedTopicIds: memory.topics.map(({ id }) => id),
+              },
+              { signal },
+            ),
+          )
+          .then((value) => ({
+            type: "patch" as const,
+            value,
+            writerCall: adapterCallFor(dependencies.writer, value),
+          }))
+          .catch((cause: unknown) => {
+            const writerCall = adapterCallFromCause(cause);
+            return adapterFailureType(cause) === "timed_out"
+              ? { type: "timed_out" as const, writerCall }
+              : { type: "failed" as const, writerCall };
           }),
-        )
-        .then((value) => ({
-          type: "patch" as const,
-          value,
-          writerCall: adapterCallFor(dependencies.writer, value),
-        }))
-        .catch((cause: unknown) => {
-          const writerCall = adapterCallFromCause(cause);
-          return adapterFailureType(cause) === "timed_out"
-            ? { type: "timed_out" as const, writerCall }
-            : { type: "failed" as const, writerCall };
-        }),
       deadline,
     );
     if (result.status === "timed_out") {
       outcome = "timed_out";
-      auditWriterCall = activeAdapterCall(dependencies.writer);
+      auditWriterCall = result.call;
     } else {
       if (result.value.type === "failed" || result.value.type === "timed_out") {
         outcome = result.value.type;
@@ -738,7 +780,7 @@ const appendAudit = async (
                     },
                   },
             );
-            if (prepared.compressed) {
+            if (prepared.compression !== undefined) {
               const callFailure = await appendAdapterCall(
                 dependencies,
                 attempt,
@@ -746,8 +788,9 @@ const appendAudit = async (
                 memory,
                 "writer",
                 "compress",
-                lastAdapterCall(dependencies.writer),
-                prepared.status === "failed" ? "failed" : "succeeded",
+                prepared.compression.call,
+                prepared.compression.status,
+                "audit-compress",
               );
               if (callFailure !== undefined)
                 return `audit compression journal failed: ${callFailure}`;
@@ -774,6 +817,7 @@ const appendAudit = async (
       : outcome === "failed"
         ? "failed"
         : "succeeded",
+    "audit-propose",
   );
   if (auditCallFailure !== undefined)
     return `audit writer call journal failed: ${auditCallFailure}`;
@@ -818,10 +862,17 @@ const appendAudit = async (
   return undefined;
 };
 
-type BudgetPreparation =
-  | { status: "ready"; memory: Memory; patch: MemoryPatch; compressed: boolean }
-  | { status: "budget_exceeded"; required: number; compressed: boolean }
-  | { status: "failed"; reason: string; compressed: boolean };
+/** The compress call made while preparing, recorded from that call itself. */
+type CompressionCall = {
+  call: AdapterCall | undefined;
+  status: "succeeded" | "failed" | "timed_out";
+};
+
+type BudgetPreparation = (
+  | { status: "ready"; memory: Memory; patch: MemoryPatch }
+  | { status: "budget_exceeded"; required: number }
+  | { status: "failed"; reason: string }
+) & { compression?: CompressionCall };
 
 const topicContent = (topic: Memory["topics"][number]): string =>
   JSON.stringify({
@@ -883,7 +934,6 @@ const prepareWithinBudget = async (
       status: "ready",
       memory: applyPatch(before, proposal),
       patch: proposal,
-      compressed: false,
     };
   if (
     !Number.isSafeInteger(budget.maxTokens) ||
@@ -895,7 +945,6 @@ const prepareWithinBudget = async (
     return {
       status: "failed",
       reason: "invalid ingest budget context",
-      compressed: false,
     };
   }
   const raw = {
@@ -917,14 +966,12 @@ const prepareWithinBudget = async (
       status: "ready",
       memory: candidate,
       patch: proposal,
-      compressed: false,
     };
   }
   if (first.nonSummaryTokens >= budget.maxTokens) {
     return {
       status: "budget_exceeded",
       required: first.totalTokens,
-      compressed: false,
     };
   }
   const target = Math.min(
@@ -935,43 +982,53 @@ const prepareWithinBudget = async (
     return {
       status: "budget_exceeded",
       required: first.totalTokens,
-      compressed: false,
     };
   const deadline =
     budget.compressionDeadlineMs ??
     dependencies.writerDeadlineMs ??
     DEFAULT_WRITER_DEADLINE_MS;
-  const compressed = await withDeadline(
-    Promise.resolve()
-      .then(() =>
-        dependencies.writer.compress({
-          memory: structuredClone(candidate),
-          taskContext,
-          maxSummaryTokens: target,
-        }),
-      )
-      .then((value) => ({ type: "patch" as const, value }))
-      .catch((cause: unknown) => ({ type: "failed" as const, cause })),
+  const compressed = await withAdapterDeadline(
+    dependencies.writer,
+    (signal) =>
+      Promise.resolve()
+        .then(() =>
+          dependencies.writer.compress(
+            {
+              memory: structuredClone(candidate),
+              taskContext,
+              maxSummaryTokens: target,
+            },
+            { signal },
+          ),
+        )
+        .then((value) => ({ type: "patch" as const, value }))
+        .catch((cause: unknown) => ({ type: "failed" as const, cause })),
     deadline,
   );
   if (compressed.status === "timed_out")
     return {
       status: "failed",
       reason: `compression timed out after ${deadline}ms`,
-      compressed: true,
+      compression: { call: compressed.call, status: "timed_out" },
     };
   if (compressed.value.type === "failed")
     return {
       status: "failed",
       reason: `compression failed: ${message(compressed.value.cause)}`,
-      compressed: true,
+      compression: {
+        call: adapterCallFromCause(compressed.value.cause),
+        status: adapterFailureType(compressed.value.cause),
+      },
     };
+  const call =
+    adapterCallFor(dependencies.writer, compressed.value.value) ??
+    lastAdapterCall(dependencies.writer);
   const valid = validateCompressionPatch(candidate, compressed.value.value);
   if (!valid.ok)
     return {
       status: "failed",
       reason: `invalid compression patch: ${valid.error.message}`,
-      compressed: true,
+      compression: { call, status: "failed" },
     };
   const compressedCandidate = applyPatch(candidate, valid.value);
   const second = assembleContext(
@@ -987,14 +1044,14 @@ const prepareWithinBudget = async (
     return {
       status: "budget_exceeded",
       required: second.totalTokens,
-      compressed: true,
+      compression: { call, status: "succeeded" },
     };
   const patch = effectivePatch(before, compressedCandidate, proposal);
   return {
     status: "ready",
     memory: applyPatch(before, patch),
     patch,
-    compressed: true,
+    compression: { call, status: "succeeded" },
   };
 };
 
@@ -1154,7 +1211,7 @@ export const ingest = async (
       taskContext,
       dependencies,
     );
-    if (prepared.compressed) {
+    if (prepared.compression !== undefined) {
       const callFailure = await appendAdapterCall(
         dependencies,
         attempt,
@@ -1162,8 +1219,8 @@ export const ingest = async (
         memory,
         "writer",
         "compress",
-        lastAdapterCall(dependencies.writer),
-        prepared.status === "failed" ? "failed" : "succeeded",
+        prepared.compression.call,
+        prepared.compression.status,
       );
       if (callFailure !== undefined)
         return retained(
@@ -1208,9 +1265,24 @@ export const ingest = async (
         required: prepared.required,
       };
     }
+    const policy = executionPolicy(dependencies);
+    const sampled = sampleAudit(
+      chunk.id,
+      policy.auditSeed,
+      policy.bypassAuditRate,
+    );
+    const auditFailure = await appendAudit(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      taskContext,
+      sampled,
+    );
+    if (auditFailure !== undefined) return retained(chunk, auditFailure);
     if (hasChanges(prepared.patch)) {
       const after = applyPatch(memory, prepared.patch, chunk.id);
-      const call = lastAdapterCall(dependencies.writer);
+      const call = prepared.compression?.call;
       const commit = buildCommit(memory, after, chunk, prepared.patch, {
         ...(classification.relevance === undefined
           ? {}
@@ -1243,21 +1315,6 @@ export const ingest = async (
             revision: result.value.revision,
           };
     }
-    const policy = executionPolicy(dependencies);
-    const sampled = sampleAudit(
-      chunk.id,
-      policy.auditSeed,
-      policy.bypassAuditRate,
-    );
-    const auditFailure = await appendAudit(
-      dependencies,
-      attempt,
-      chunk,
-      memory,
-      taskContext,
-      sampled,
-    );
-    if (auditFailure !== undefined) return retained(chunk, auditFailure);
     const commit = buildCommit(memory, undefined, chunk, undefined, {
       ...(classification.relevance === undefined
         ? {}
@@ -1286,45 +1343,56 @@ export const ingest = async (
 
   const writerDeadline =
     dependencies.writerDeadlineMs ?? DEFAULT_WRITER_DEADLINE_MS;
-  const proposalResult = await withDeadline(
-    Promise.resolve()
-      .then(() =>
-        mode === "baseline"
-          ? runBaseline(
-              dependencies.writer,
-              chunk,
-              structuredClone(memory),
-              taskContext,
-            )
-          : dependencies.writer.propose({
-              chunk,
-              memory: structuredClone(memory),
-              taskContext,
-              affectedTopicIds:
-                mode === "shadow"
-                  ? memory.topics.map(({ id }) => id)
-                  : (classification.routing?.affectedTopicIds ?? []),
-              ...(mode === "active" && classification.assessment !== undefined
-                ? { assessment: classification.assessment }
-                : {}),
-            }),
-      )
-      .then((value) => ({ type: "patch" as const, value }))
-      .catch((cause: unknown) => ({ type: "failed" as const, cause })),
+  const proposalResult = await withAdapterDeadline(
+    dependencies.writer,
+    (signal) =>
+      Promise.resolve()
+        .then(() =>
+          mode === "baseline"
+            ? runBaseline(
+                dependencies.writer,
+                chunk,
+                structuredClone(memory),
+                taskContext,
+                { signal },
+              )
+            : dependencies.writer.propose(
+                {
+                  chunk,
+                  memory: structuredClone(memory),
+                  taskContext,
+                  affectedTopicIds:
+                    mode === "shadow"
+                      ? memory.topics.map(({ id }) => id)
+                      : (classification.routing?.affectedTopicIds ?? []),
+                  ...(mode === "active" &&
+                  classification.assessment !== undefined
+                    ? { assessment: classification.assessment }
+                    : {}),
+                },
+                { signal },
+              ),
+        )
+        .then((value) => ({ type: "patch" as const, value }))
+        .catch((cause: unknown) => ({ type: "failed" as const, cause })),
     writerDeadline,
   );
   if (proposalResult.status === "timed_out") {
-    await appendAdapterCall(
+    const callJournalFailure = await appendAdapterCall(
       dependencies,
       attempt,
       chunk,
       memory,
       "writer",
       "propose",
-      activeAdapterCall(dependencies.writer) ??
-        lastAdapterCall(dependencies.writer),
+      proposalResult.call,
       "timed_out",
     );
+    if (callJournalFailure !== undefined)
+      return retained(
+        chunk,
+        `writer call journal failed: ${callJournalFailure}`,
+      );
     return retainAtGate(
       dependencies,
       attempt,
@@ -1414,7 +1482,7 @@ export const ingest = async (
       ...proposedValid.value.addProtected,
     ],
   };
-  const valid = validatePatch(memory, chunk, merged);
+  const valid = validatePatch(memory, chunk, merged, "merged");
   if (!valid.ok) {
     return retainAtGate(
       dependencies,
@@ -1426,13 +1494,14 @@ export const ingest = async (
       `patch escalation: ${valid.error.message}`,
     );
   }
+  const writerCall = proposalCall ?? lastAdapterCall(dependencies.writer);
   const prepared = await prepareWithinBudget(
     memory,
     valid.value,
     taskContext,
     dependencies,
   );
-  if (prepared.compressed) {
+  if (prepared.compression !== undefined) {
     const compressionCallFailure = await appendAdapterCall(
       dependencies,
       attempt,
@@ -1440,8 +1509,8 @@ export const ingest = async (
       memory,
       "writer",
       "compress",
-      lastAdapterCall(dependencies.writer),
-      prepared.status === "failed" ? "failed" : "succeeded",
+      prepared.compression.call,
+      prepared.compression.status,
     );
     if (compressionCallFailure !== undefined)
       return retained(
@@ -1491,7 +1560,6 @@ export const ingest = async (
   const after = changed
     ? applyPatch(memory, prepared.patch, chunk.id)
     : undefined;
-  const writerCall = proposalCall ?? lastAdapterCall(dependencies.writer);
   const commit = buildCommit(
     memory,
     after,

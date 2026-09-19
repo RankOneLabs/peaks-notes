@@ -1,4 +1,5 @@
 import type {
+  CallOptions,
   CompressInput,
   MemoryPatch,
   UpdateInput,
@@ -12,13 +13,17 @@ import {
   estimateModelTokens,
   type GenerateResponse,
   type GenerativeProvider,
+  generateWithin,
   type ModelAdapterConfig,
   type ModelCall,
 } from "./provider";
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
-  #activeCall: { startedAt: number; call: ModelCall } | undefined;
+  readonly #activeCalls = new Map<
+    AbortSignal | undefined,
+    { startedAt: number; call: ModelCall }
+  >();
   readonly #callsByResult = new WeakMap<MemoryPatch, ModelCall>();
 
   constructor(
@@ -37,19 +42,21 @@ export class LlmWriter implements Writer {
     return call === undefined ? undefined : structuredClone(call);
   }
 
-  getActiveCall(): ModelCall | undefined {
-    return this.#activeCall === undefined
+  /** The in-flight call started under `signal`; concurrent operations stay separate. */
+  getActiveCall(signal?: AbortSignal): ModelCall | undefined {
+    const active = this.#activeCalls.get(signal);
+    return active === undefined
       ? undefined
       : {
-          ...structuredClone(this.#activeCall.call),
-          latencyMs: Math.max(
-            0,
-            performance.now() - this.#activeCall.startedAt,
-          ),
+          ...structuredClone(active.call),
+          latencyMs: Math.max(0, performance.now() - active.startedAt),
         };
   }
 
-  async #call(prompt: { system: string; user: string }): Promise<MemoryPatch> {
+  async #call(
+    prompt: { system: string; user: string },
+    signal?: AbortSignal,
+  ): Promise<MemoryPatch> {
     const startedAt = performance.now();
     const inputTokens = estimateModelTokens(`${prompt.system}\n${prompt.user}`);
     const emptyUsage = {
@@ -79,48 +86,40 @@ export class LlmWriter implements Writer {
       );
     }
     let response: GenerateResponse;
-    this.#activeCall = {
-      startedAt,
-      call: call(emptyUsage, true, "unknown"),
-    };
+    const active = { startedAt, call: call(emptyUsage, true, "unknown") };
+    this.#activeCalls.set(signal, active);
     try {
-      response = await new Promise<
-        Awaited<ReturnType<GenerativeProvider["generate"]>>
-      >((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new DOMException("deadline expired", "AbortError")),
-          this.config.deadlineMs,
-        );
-        this.provider
-          .generate({
-            ...prompt,
-            model: this.config.model,
-            promptVersion: this.config.promptVersion,
-            deadlineMs: this.config.deadlineMs,
-            responseContract: MemoryPatchContract,
-          })
-          .then(resolve, reject)
-          .finally(() => clearTimeout(timer));
+      response = await generateWithin(this.provider, {
+        ...prompt,
+        model: this.config.model,
+        promptVersion: this.config.promptVersion,
+        deadlineMs: this.config.deadlineMs,
+        responseContract: MemoryPatchContract,
+        ...(signal === undefined ? {} : { signal }),
       });
     } catch (cause) {
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
-      this.#lastCall = call(
+      const failedCall = call(
         emptyUsage,
         true,
         timedOut ? "unknown" : "estimated",
       );
-      this.#activeCall = undefined;
+      // A cancelled call may settle during a later call; leave that call's state alone.
+      if (signal?.aborted !== true) this.#lastCall = failedCall;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut
-          ? `writer deadline expired after ${Math.round(this.#lastCall.latencyMs)}ms`
+          ? `writer deadline expired after ${Math.round(failedCall.latencyMs)}ms`
           : `writer provider failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        this.#lastCall,
+        failedCall,
         cause,
       );
     }
-    this.#activeCall = undefined;
+    if (this.#activeCalls.get(signal) === active)
+      this.#activeCalls.delete(signal);
     const completedCall = {
       ...call(response.usage, true, "reported"),
       model: response.model,
@@ -140,11 +139,11 @@ export class LlmWriter implements Writer {
     }
   }
 
-  propose(input: UpdateInput): Promise<MemoryPatch> {
-    return this.#call(buildUpdatePrompt(input));
+  propose(input: UpdateInput, options?: CallOptions): Promise<MemoryPatch> {
+    return this.#call(buildUpdatePrompt(input), options?.signal);
   }
 
-  compress(input: CompressInput): Promise<MemoryPatch> {
-    return this.#call(buildCompressPrompt(input));
+  compress(input: CompressInput, options?: CallOptions): Promise<MemoryPatch> {
+    return this.#call(buildCompressPrompt(input), options?.signal);
   }
 }

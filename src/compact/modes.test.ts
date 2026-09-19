@@ -16,9 +16,21 @@ test("shadow and baseline always invoke writer while active honors bypass", () =
 });
 
 test("audit work has a bounded deadline", async () => {
-  expect(await withDeadline(new Promise(() => {}), 1)).toEqual({
-    status: "timed_out",
-  });
+  let observed: AbortSignal | undefined;
+  let liveAtSnapshot: boolean | undefined;
+  const result = await withDeadline(
+    (signal) => {
+      observed = signal;
+      return new Promise(() => {});
+    },
+    1,
+    () => {
+      liveAtSnapshot = observed?.aborted === false;
+    },
+  );
+  expect(result).toEqual({ status: "timed_out" });
+  expect(liveAtSnapshot).toBe(true);
+  expect(observed?.aborted).toBe(true);
 });
 
 test("semantically unchanged snapshots skip the evaluator provider", async () => {

@@ -12,6 +12,7 @@ import type {
   Commit,
   DomainError,
   EvaluationJournalEntry,
+  ExecutionPolicy,
   IngestResult,
   JournalEntry,
   Memory,
@@ -47,6 +48,8 @@ export type FixtureReplayResult = {
   result: IngestResult;
   revision: number;
   journal: JournalEntry[];
+  executionPolicy: ExecutionPolicy;
+  classifierPolicy: ClassifierPolicy;
   auditSampled?: boolean;
 };
 
@@ -56,6 +59,8 @@ export type ReplayResult = {
   journal: JournalEntry[];
   auditAssignments: Record<string, boolean>;
   metrics: MetricsReport;
+  /** Fixtures whose expectations were checked, and those skipped under an override. */
+  assertions: { asserted: number; skipped: string[] };
 };
 
 class ReplayStore implements Store {
@@ -151,8 +156,14 @@ const runFixture = async (
   const { fixture } = loaded;
   const store = new ReplayStore(fixture.initialMemory);
   const adapterMode = options.adapters ?? "stub";
+  const config = adapterMode === "live" ? loadConfig() : undefined;
   const live =
-    adapterMode === "live" ? createConfiguredAdapters(loadConfig()) : undefined;
+    config === undefined ? undefined : createConfiguredAdapters(config);
+  const auditDeadlineMs =
+    fixture.auditDeadlineMs ?? config?.evaluation.auditDeadlineMs;
+  const shadowComparisonDeadlineMs =
+    fixture.shadowComparisonDeadlineMs ??
+    config?.evaluation.shadowComparisonDeadlineMs;
   // Until a standalone trace schema exists, `recorded` intentionally consumes
   // the fixture's checked-in queues through the deterministic adapters. It is
   // an explicit offline alias, not a live-provider configuration.
@@ -184,12 +195,13 @@ const runFixture = async (
     recordedAssignment === undefined
       ? requestedPolicy
       : { ...requestedPolicy, bypassAuditRate: recordedAssignment ? 1 : 0 };
+  const classifierPolicy = options.policy ?? fixture.classifierPolicy;
   const result = await ingest(fixture.chunk, fixture.taskContext, {
     store,
     classifier,
     writer,
     evaluator,
-    classifierPolicy: options.policy ?? fixture.classifierPolicy,
+    classifierPolicy,
     executionPolicy,
     budget: {
       maxTokens: fixture.budget?.maxTokens ?? 100_000,
@@ -201,12 +213,10 @@ const runFixture = async (
         : { recentMessageCount: fixture.budget.recentMessageCount }),
     },
     ...(options.mode === undefined ? {} : { mode: options.mode }),
-    ...(fixture.auditDeadlineMs === undefined
+    ...(auditDeadlineMs === undefined ? {} : { auditDeadlineMs }),
+    ...(shadowComparisonDeadlineMs === undefined
       ? {}
-      : { auditDeadlineMs: fixture.auditDeadlineMs }),
-    ...(fixture.shadowComparisonDeadlineMs === undefined
-      ? {}
-      : { shadowComparisonDeadlineMs: fixture.shadowComparisonDeadlineMs }),
+      : { shadowComparisonDeadlineMs }),
     ...(fixture.writerDeadlineMs === undefined
       ? {}
       : { writerDeadlineMs: fixture.writerDeadlineMs }),
@@ -224,9 +234,31 @@ const runFixture = async (
     result,
     revision: store.memory.revision,
     journal: store.journal,
+    executionPolicy,
+    classifierPolicy,
     ...(audit?.type === "audit_record" ? { auditSampled: audit.sampled } : {}),
   };
 };
+
+/** True when the replay used exactly the mode/policy the fixture was authored with. */
+const matchesAuthoredPolicy = (
+  loaded: LoadedFixture,
+  replay: FixtureReplayResult,
+  mode: ReplayOptions["mode"],
+): boolean =>
+  // A baseline override leaves executionPolicy.mode untouched, so compare the override itself.
+  (mode === undefined || mode === loaded.fixture.executionPolicy.mode) &&
+  replay.executionPolicy.mode === loaded.fixture.executionPolicy.mode &&
+  replay.executionPolicy.bypassAuditRate ===
+    loaded.fixture.executionPolicy.bypassAuditRate &&
+  replay.executionPolicy.auditSeed ===
+    loaded.fixture.executionPolicy.auditSeed &&
+  replay.classifierPolicy.relevanceThreshold ===
+    loaded.fixture.classifierPolicy.relevanceThreshold &&
+  replay.classifierPolicy.sameInfoMinConfidence ===
+    loaded.fixture.classifierPolicy.sameInfoMinConfidence &&
+  replay.classifierPolicy.uncoveredNoChangeMinConfidence ===
+    loaded.fixture.classifierPolicy.uncoveredNoChangeMinConfidence;
 
 export const assertExpected = (
   loaded: LoadedFixture,
@@ -295,6 +327,7 @@ export const runReplay = async (
       fixtures: [],
       journal: archive.entries,
       auditAssignments: auditAssignments(archive.entries),
+      assertions: { asserted: 0, skipped: [] },
       metrics: computeMetrics({
         entries: archive.entries,
         labels: archive.labels,
@@ -308,15 +341,19 @@ export const runReplay = async (
     options.manifestPath,
   );
   const fixtures: FixtureReplayResult[] = [];
+  const skippedAssertions: string[] = [];
+  let assertedCount = 0;
   for (const item of loaded) {
     const replay = await runFixture(item, effectiveOptions);
     if (
       (options.adapters ?? "stub") !== "live" &&
-      options.mode === undefined &&
-      selectedPolicy === undefined &&
-      options.recordedAuditAssignments === undefined
-    )
+      matchesAuthoredPolicy(item, replay, effectiveOptions.mode)
+    ) {
       assertExpected(item, replay);
+      assertedCount += 1;
+    } else {
+      skippedAssertions.push(item.path);
+    }
     fixtures.push(replay);
   }
   const journal = fixtures.flatMap(({ journal: entries }) => entries);
@@ -325,6 +362,7 @@ export const runReplay = async (
     fixtures,
     journal,
     auditAssignments: auditAssignments(journal),
+    assertions: { asserted: assertedCount, skipped: skippedAssertions },
     metrics: computeMetrics({
       entries: journal,
       labels: loaded.map(({ label }) => label),

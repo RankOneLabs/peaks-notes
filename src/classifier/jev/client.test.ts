@@ -83,7 +83,7 @@ test("deadline remains active while consuming a Jev response body", async () => 
   }
 });
 
-test("classifier retains only its most recent full call trace", async () => {
+test("getCalls returns every recorded trace without draining", async () => {
   const recorded = recordedJevFetch([
     { status: 200, body: success },
     { status: 200, body: success },
@@ -108,5 +108,7 @@ test("classifier retains only its most recent full call trace", async () => {
   };
   await classifier.scoreRelevance(input);
   await classifier.scoreRelevance(input);
-  expect(classifier.getCalls()).toHaveLength(1);
+  expect(classifier.getCalls()).toHaveLength(2);
+  expect(classifier.getCalls()).toHaveLength(2);
+  expect(classifier.drainCalls()).toHaveLength(2);
 });

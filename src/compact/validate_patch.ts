@@ -6,16 +6,39 @@ import {
   MemoryPatchSchema,
   ok,
   type Result,
+  type SourceRef,
 } from "../schema";
 import type { CompactEscalation } from "./select_topics";
 
 const failure = (message: string): Result<never, CompactEscalation> =>
   err({ code: "escalation", gate: "patch", message, policy: {} });
 
+const rangeKey = ({ messageId, start, end }: SourceRef): string =>
+  `${messageId}:${start ?? ""}:${end ?? ""}`;
+
+const hasRange = (source: SourceRef): boolean =>
+  source.start !== undefined || source.end !== undefined;
+
+/** Older message text is unavailable, so only ranges already in memory carry over. */
+const memoryRanges = (memory: Memory): Set<string> =>
+  new Set(
+    [
+      ...memory.topics.flatMap(({ sources }) => sources),
+      ...memory.protected.flatMap(({ sources }) => sources),
+    ].map(rangeKey),
+  );
+
+/**
+ * Validates a patch against memory and the chunk. Source ranges are half-open
+ * `[start, end)` offsets into the cited message content. With origin "writer",
+ * protected records must be verbatim constraint or decision text from the chunk;
+ * origin "merged" admits the deterministic records produced by `protect`.
+ */
 export const validatePatch = (
   memory: Memory,
   chunk: Chunk,
   input: unknown,
+  origin: "writer" | "merged" = "writer",
 ): Result<MemoryPatch, CompactEscalation> => {
   const parsed = MemoryPatchSchema.safeParse(input);
   if (!parsed.success)
@@ -33,6 +56,10 @@ export const validatePatch = (
       record.sources.map(({ messageId }) => messageId),
     ),
   ]);
+  const chunkContent = new Map(
+    chunk.messages.map(({ id, content }) => [id, content]),
+  );
+  const knownRanges = memoryRanges(memory);
   const replacementIds = new Set<string>();
   for (const replacement of patch.replacements) {
     const current = topics.get(replacement.topicId);
@@ -51,6 +78,13 @@ export const validatePatch = (
   ]) {
     if (!sources.has(source.messageId))
       return failure(`unknown source message: ${source.messageId}`);
+    const content = chunkContent.get(source.messageId);
+    if (content === undefined) {
+      if (hasRange(source) && !knownRanges.has(rangeKey(source)))
+        return failure(`unverifiable source range: ${source.messageId}`);
+    } else if ((source.end ?? source.start ?? 0) > content.length) {
+      return failure(`source range out of bounds: ${source.messageId}`);
+    }
   }
   const protectedById = new Map(
     memory.protected.map((record) => [record.id, record]),
@@ -60,11 +94,36 @@ export const validatePatch = (
     if (protectedById.has(record.id) || added.has(record.id))
       return failure(`duplicate protected record: ${record.id}`);
     added.add(record.id);
+    if (origin !== "writer") continue;
+    if (record.kind !== "constraint" && record.kind !== "decision")
+      return failure(
+        `writer cannot add protected ${record.kind}: ${record.id}`,
+      );
+    if (record.status !== "active")
+      return failure(`writer protected record must be active: ${record.id}`);
+    if (record.text.length === 0 || record.sources.length === 0)
+      return failure(`protected record lacks source text: ${record.id}`);
+    for (const source of record.sources) {
+      const content = chunkContent.get(source.messageId);
+      if (content === undefined)
+        return failure(
+          `protected record cites message outside chunk: ${record.id}`,
+        );
+      const verbatim = hasRange(source)
+        ? content.slice(source.start ?? 0, source.end) === record.text
+        : content.includes(record.text);
+      if (!verbatim)
+        return failure(`protected record text is not verbatim: ${record.id}`);
+    }
   }
+  const superseded = new Set<string>();
   for (const supersession of patch.supersedeProtected) {
     const current = protectedById.get(supersession.id);
     if (current === undefined)
       return failure(`unknown protected record: ${supersession.id}`);
+    if (superseded.has(supersession.id))
+      return failure(`duplicate supersession: ${supersession.id}`);
+    superseded.add(supersession.id);
     if (supersession.id === supersession.supersededBy)
       return failure(`protected record cannot supersede itself: ${current.id}`);
     if (
@@ -112,6 +171,7 @@ export const validateCompressionPatch = (
       sources.map(({ messageId }) => messageId),
     ),
   ]);
+  const knownRanges = memoryRanges(memory);
   const seen = new Set<string>();
   for (const replacement of patch.replacements) {
     const current = topics.get(replacement.topicId);
@@ -134,6 +194,14 @@ export const validateCompressionPatch = (
     )
       return failure(
         `compression introduced unknown source: ${replacement.topicId}`,
+      );
+    if (
+      replacement.sources.some(
+        (source) => hasRange(source) && !knownRanges.has(rangeKey(source)),
+      )
+    )
+      return failure(
+        `compression introduced unverifiable source range: ${replacement.topicId}`,
       );
   }
   return ok(patch);
