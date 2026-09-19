@@ -9,6 +9,23 @@ const TextMessageSchema = z
   })
   .strict();
 
+/**
+ * Spec §5 Step A: host-provided action metadata. A read-only call is not
+ * protected; a state-changing call is reduced to a receipt that keeps
+ * `receiptArguments` (default: every argument) and the result's error flag.
+ * A call without metadata is protected verbatim.
+ */
+export const ToolActionSchema = z.discriminatedUnion("effect", [
+  z.object({ effect: z.literal("read_only") }).strict(),
+  z
+    .object({
+      effect: z.literal("state_changing"),
+      receiptArguments: z.array(z.string().min(1)).min(1).optional(),
+    })
+    .strict(),
+]);
+export type ToolAction = z.infer<typeof ToolActionSchema>;
+
 const ToolCallMessageSchema = z
   .object({
     id: MessageIdSchema,
@@ -19,6 +36,7 @@ const ToolCallMessageSchema = z
         id: z.string().min(1),
         name: z.string().min(1),
         arguments: z.unknown(),
+        action: ToolActionSchema.optional(),
       })
       .strict(),
   })
@@ -64,6 +82,18 @@ export const ChunkSchema = z
           });
         }
         calls.set(message.toolCall.id, index);
+        const { action, arguments: args } = message.toolCall;
+        if (
+          action?.effect === "state_changing" &&
+          action.receiptArguments !== undefined &&
+          (typeof args !== "object" || args === null || Array.isArray(args))
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["messages", index, "toolCall", "arguments"],
+            message: "receiptArguments requires object arguments",
+          });
+        }
       }
       if ("toolResult" in message) {
         if (results.has(message.toolResult.callId)) {

@@ -42,4 +42,30 @@ describe("ChunkSchema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  test("rejects receiptArguments on non-object arguments", () => {
+    const result = ChunkSchema.safeParse({
+      ...base,
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "calling",
+          toolCall: {
+            id: "call-1",
+            name: "Bash",
+            arguments: "rm -rf build",
+            action: { effect: "state_changing", receiptArguments: ["command"] },
+          },
+        },
+        {
+          id: "message-2",
+          role: "tool",
+          content: "done",
+          toolResult: { callId: "call-1" },
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
 });

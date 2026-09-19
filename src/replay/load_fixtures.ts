@@ -27,6 +27,7 @@ export const REQUIRED_CASES = [
   "transient_chatter",
   "equal_length_tool_output_change",
   "state_changing_receipt",
+  "read_only_tool",
   "explicit_preservation",
   "replayed_chunk",
   "malformed_timeout_overlong",

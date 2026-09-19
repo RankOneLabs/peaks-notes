@@ -74,6 +74,16 @@ The MVP stores sources per section version. Claim-level attribution can follow i
 
 Archive the chunk before processing. Apply explicit pins and host-provided action metadata. Protect known state-changing call inputs and their receipts. Unknown tool repeatability defaults to non-repeatable; never assume that a deployment, payment, or external read can simply be repeated.
 
+The host supplies action metadata on each tool call:
+
+```ts
+type ToolAction =
+  | { effect: 'read_only' }
+  | { effect: 'state_changing'; receiptArguments?: string[] };
+```
+
+A `read_only` call and its result are not protected; the writer summarizes them like any other content. A `state_changing` call becomes one action receipt citing the call and its result, holding the tool name, the arguments named in `receiptArguments` (every argument when omitted), and the result's error flag; the result content goes to the writer. The host marks a tool read-only only when it knows that repeating the call is safe and its output does not need to stay exact.
+
 The writer may propose additional protected constraints and decisions. This semantic detection is fallible and must be evaluated; only explicit pins and supplied metadata are deterministic guarantees. Without tool metadata, retain unknown tool records verbatim in the MVP.
 
 ### Step B: score relevance to every topic
@@ -299,6 +309,7 @@ Required cases:
 | Novel but transient progress chatter | No topic creation |
 | Tool outputs with equal lengths but different critical content | Actual content reaches assessment; meaningful difference is preserved |
 | State-changing action receipt | Exact receipt retained; no rerun implied |
+| Tool call marked read-only by host metadata | Nothing protected; the writer is not forced and the classifier may bypass |
 | Explicit compaction preservation instruction | Protected information survives |
 | Replayed chunk | No duplicated section or update |
 | Malformed response, timeout, or overlong input | Chunk left unprocessed; no commit |

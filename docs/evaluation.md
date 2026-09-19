@@ -1,6 +1,6 @@
 # Replay evaluation
 
-The fixture manifest declares two development directories and one held-out directory. Threshold tuning accepts only a directory declared under `dev`; it rejects `fixtures/held_out` so held-out labels cannot influence policy selection. The complete set contains 27 hand-labeled cases and maps every required case from specification §8 to at least one fixture.
+The fixture manifest declares two development directories and one held-out directory. Threshold tuning accepts only a directory declared under `dev`; it rejects `fixtures/held_out` so held-out labels cannot influence policy selection. The complete set contains 28 hand-labeled cases and maps every required case from specification §8 to at least one fixture.
 
 Run deterministic acceptance fixtures with recorded stub responses:
 
