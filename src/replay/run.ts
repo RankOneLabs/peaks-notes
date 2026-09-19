@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { z } from "zod";
 import { createConfiguredAdapters } from "../adapters";
 import { StubClassifier } from "../classifier/stub";
 import { ingest } from "../compact/ingest";
@@ -18,7 +19,7 @@ import type {
   Topic,
   TopicId,
 } from "../schema";
-import { ok } from "../schema";
+import { ClassifierPolicySchema, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
 import { StubWriter } from "../writer/stub";
 import {
@@ -115,6 +116,27 @@ export const reuseRecordedAuditAssignments = (
   entries: readonly JournalEntry[],
 ): ReadonlyMap<string, boolean> => new Map(Object.entries(auditAssignments(entries)));
 
+const ActiveSweepRecordSchema = z
+  .object({
+    version: z.literal(1),
+    split: z.literal("dev"),
+    chosenPolicy: ClassifierPolicySchema,
+  })
+  .passthrough();
+
+const loadActivePolicy = async (path: string): Promise<ClassifierPolicy> => {
+  try {
+    return ActiveSweepRecordSchema.parse(
+      JSON.parse(await readFile(path, "utf8")),
+    ).chosenPolicy;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `active mode requires a valid recorded threshold sweep: ${path}: ${detail}`,
+    );
+  }
+};
+
 const runFixture = async (
   loaded: LoadedFixture,
   options: ReplayOptions,
@@ -188,6 +210,12 @@ const runFixture = async (
       : { writerDeadlineMs: fixture.writerDeadlineMs }),
     attemptIdFactory: () => "replay",
   });
+  if (recordedAssignment !== undefined) {
+    for (const entry of store.journal) {
+      if (entry.type === "audit_record" && entry.chunkId === fixture.chunk.id)
+        entry.policy = structuredClone(requestedPolicy);
+    }
+  }
   const audit = store.journal.find((entry) => entry.type === "audit_record");
   return {
     file: loaded.path,
@@ -215,12 +243,15 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
   if ((options.fixtures === undefined) === (options.journal === undefined))
     throw new Error("provide exactly one of fixtures or journal");
   const sweepRecordPath = options.sweepRecordPath ?? "fixtures/sweep-record.json";
-  if (options.mode === "active" && !existsSync(sweepRecordPath))
-    throw new Error(`active mode requires a recorded threshold sweep: ${sweepRecordPath}`);
+  const recordedPolicy =
+    options.mode === "active" ? await loadActivePolicy(sweepRecordPath) : undefined;
+  const selectedPolicy = options.policy ?? recordedPolicy;
+  const effectiveOptions =
+    selectedPolicy === undefined ? options : { ...options, policy: selectedPolicy };
 
   if (options.journal !== undefined) {
     const archive = await loadArchivedJournal(options.journal);
-    const policy = options.policy ?? archive.policy ?? defaultPolicy;
+    const policy = selectedPolicy ?? archive.policy ?? defaultPolicy;
     return {
       source: options.journal,
       fixtures: [],
@@ -233,11 +264,11 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
   const loaded = await loadFixtures(options.fixtures as string, options.manifestPath);
   const fixtures: FixtureReplayResult[] = [];
   for (const item of loaded) {
-    const replay = await runFixture(item, options);
+    const replay = await runFixture(item, effectiveOptions);
     if (
       (options.adapters ?? "stub") !== "live" &&
       options.mode === undefined &&
-      options.policy === undefined &&
+      selectedPolicy === undefined &&
       options.recordedAuditAssignments === undefined
     )
       assertExpected(item, replay);
@@ -252,7 +283,7 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
     metrics: computeMetrics({
       entries: journal,
       labels: loaded.map(({ label }) => label),
-      policy: options.policy ?? loaded[0]?.fixture.classifierPolicy ?? defaultPolicy,
+      policy: selectedPolicy ?? loaded[0]?.fixture.classifierPolicy ?? defaultPolicy,
     }),
   };
 };
