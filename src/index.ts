@@ -5,6 +5,7 @@ export * from "./compact";
 export type { AppConfig, ModelAdapterConfig } from "./config";
 export { loadConfig } from "./config";
 export { LlmEvaluator } from "./evaluator/llm_evaluator";
+export * from "./render/context";
 export * from "./render/render";
 export * from "./schema";
 export * from "./store/sqlite";

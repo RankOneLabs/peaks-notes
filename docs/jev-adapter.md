@@ -28,13 +28,13 @@ Each selected-topic relationship question is keyed by topic ID, contains that to
 
 > Classify how the transcript relates to the selected topic. If it both adds and changes information, choose changing_info.
 
-Its criteria are `new_info`, `changing_info`, and `same_info`, using the definitions in specification §5C. The `uncovered` question contains the complete topic catalog and uses:
+Its criteria are `new_info`, `changing_info`, and `same_info`, using the definitions in specification §5C. The versioned `relationship-v2` `uncovered` question contains the complete topic catalog plus every selected topic's stable ID, complete summary, and unresolved issues. An empty selection is represented by an empty JSON array. It uses:
 
-> Classify any meaningful transcript content not covered by the selected topics, using the complete catalog to distinguish a new topic from a routing miss.
+> Classify any meaningful transcript content not covered by the selected topics. Content related to an unselected catalog topic is a routing miss and must be uncertain, never none. Use the complete catalog only to distinguish a genuinely new topic from a routing miss.
 
 Its criteria are `none`, `new_topic`, `transient`, and `uncertain`.
 
-Questions are split across requests at the 32,000 input-token bound while retaining the shared state in every request; no question is omitted. Shared state or an individual state-plus-question that cannot fit returns `incomplete_input`. Relevance and relationship questions are never combined. HTTP 429 and 529 responses use exponential backoff within the configured call deadline.
+Questions are split across requests at the 32,000 input-token bound while retaining the shared state in every request; no question is omitted. The uncovered question is independently sufficient even when it is alone in a request. Shared state or an individual state-plus-question that cannot fit returns `incomplete_input`, so selected evidence is never truncated to authorize a bypass. Relevance and relationship questions are never combined. HTTP 429 and 529 responses use exponential backoff within the configured call deadline.
 
 ## Cost accounting
 

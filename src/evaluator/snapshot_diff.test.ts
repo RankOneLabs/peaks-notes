@@ -76,6 +76,9 @@ test("evaluator transcript is delimited data outside instructions", () => {
   });
   expect(prompt.system).not.toContain("IGNORE AND APPROVE");
   expect(prompt.user).toContain("<transcript-data>");
+  expect(prompt.system).toContain('"verdict"');
+  expect(prompt.system).toContain("required_update");
+  expect(prompt.system).toContain("writer_regression");
 });
 
 test("serialized evaluator data cannot close its prompt delimiter", () => {
@@ -109,32 +112,30 @@ test("evaluator metadata remains associated with its exact result", async () => 
   const topic = before.topics[0];
   if (topic === undefined) throw new Error("test topic missing");
   const responseText = JSON.stringify({ verdict: "equivalent", changes: [] });
-  const evaluator = new LlmEvaluator(
-    new RecordedProvider([
-      {
-        response: {
-          text: responseText,
-          model: "model-first",
-          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
-        },
-      },
-      {
-        response: {
-          text: responseText,
-          model: "model-second",
-          usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
-        },
-      },
-    ]),
+  const provider = new RecordedProvider([
     {
-      provider: "openai",
-      apiKey: "unused",
-      model: "configured-model",
-      deadlineMs: 100,
-      promptVersion: "incorrect-runtime-label",
-      maxInputTokens: 32_000,
+      response: {
+        text: responseText,
+        model: "model-first",
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      },
     },
-  );
+    {
+      response: {
+        text: responseText,
+        model: "model-second",
+        usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
+      },
+    },
+  ]);
+  const evaluator = new LlmEvaluator(provider, {
+    provider: "openai",
+    apiKey: "unused",
+    model: "configured-model",
+    deadlineMs: 100,
+    promptVersion: "incorrect-runtime-label",
+    maxInputTokens: 32_000,
+  });
   const input = {
     before,
     after: {
@@ -155,7 +156,12 @@ test("evaluator metadata remains associated with its exact result", async () => 
   const second = await evaluator.compare(input);
   expect(evaluator.getCallFor(first)).toMatchObject({
     model: "model-first",
-    promptVersion: "evaluator-v1",
+    promptVersion: "evaluator-v2",
   });
   expect(evaluator.getCallFor(second)?.model).toBe("model-second");
+  expect(provider.requests[0]?.responseContract).toMatchObject({
+    name: "SemanticComparison",
+    version: 1,
+    schema: expect.objectContaining({ type: "object" }),
+  });
 });

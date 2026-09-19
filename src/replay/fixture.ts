@@ -44,6 +44,14 @@ export const DeterministicFixtureSchema = z
     auditDeadlineMs: z.number().int().positive().optional(),
     shadowComparisonDeadlineMs: z.number().int().positive().optional(),
     writerDeadlineMs: z.number().int().positive().optional(),
+    budget: z
+      .object({
+        maxTokens: z.number().int().positive(),
+        summaryBudgetTokens: z.number().int().positive().default(4_000),
+        recentMessageCount: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     stubs: z
       .object({
         relevance: z.array(response(RelevanceResultSchema)).default([]),

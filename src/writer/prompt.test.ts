@@ -19,6 +19,9 @@ test("transcript is delimited data and never enters writer instructions", () => 
   expect(prompt.system).not.toContain(attack);
   expect(prompt.user).toContain(`<transcript-data>`);
   expect(prompt.user).toContain(attack);
+  expect(prompt.system).toContain('"expectedVersion"');
+  expect(prompt.system).toContain('"messageId"');
+  expect(prompt.system).toContain('"supersedeProtected"');
 });
 
 test("serialized writer data cannot close its prompt delimiter", () => {

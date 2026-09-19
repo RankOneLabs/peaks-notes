@@ -1,6 +1,11 @@
-import type { CompressInput, UpdateInput } from "../schema";
+import {
+  type CompressInput,
+  MemoryPatchContract,
+  serializeResponseContract,
+  type UpdateInput,
+} from "../schema";
 
-export const WRITER_PROMPT_VERSION = "writer-v1";
+export const WRITER_PROMPT_VERSION = "writer-v2";
 
 const rules = `Writer rules (Topic Compactor specification section 5D):
 1. Preserve existing relevant facts unless source evidence supports a change.
@@ -11,7 +16,9 @@ const rules = `Writer rules (Topic Compactor specification section 5D):
 6. Generate no tool actions; edit memory only.
 7. Update only affected sections and do not duplicate material across topics.`;
 
-const outputContract = `Return only one JSON object matching MemoryPatch: {replacements, newTopics, addProtected, supersedeProtected}. Include source references for every proposed fact. Never invent source IDs.`;
+const outputContract = `Return only one JSON object matching this versioned response contract:
+${serializeResponseContract(MemoryPatchContract)}
+All four top-level arrays are required; use empty arrays when there are no entries. Existing-topic replacements require the exact topicId and expectedVersion. New-topic IDs and versions are assigned by code and therefore are absent. Every source is an object containing a real messageId and may include start/end offsets. Never invent source IDs.`;
 
 export type Prompt = { system: string; user: string };
 

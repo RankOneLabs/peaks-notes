@@ -1,7 +1,8 @@
-import type {
-  Evaluator,
-  SemanticComparison,
-  SemanticComparisonInput,
+import {
+  type Evaluator,
+  type SemanticComparison,
+  SemanticComparisonContract,
+  type SemanticComparisonInput,
 } from "../schema";
 import {
   AdapterError,
@@ -16,6 +17,7 @@ import { memorySemanticallyEqual } from "./snapshot_diff";
 
 export class LlmEvaluator implements Evaluator {
   #lastCall: ModelCall | undefined;
+  #activeCall: { startedAt: number; call: ModelCall } | undefined;
   readonly #callsByResult = new WeakMap<SemanticComparison, ModelCall>();
   constructor(
     readonly provider: GenerativeProvider,
@@ -31,6 +33,18 @@ export class LlmEvaluator implements Evaluator {
   getCallFor(result: SemanticComparison): ModelCall | undefined {
     const call = this.#callsByResult.get(result);
     return call === undefined ? undefined : structuredClone(call);
+  }
+
+  getActiveCall(): ModelCall | undefined {
+    return this.#activeCall === undefined
+      ? undefined
+      : {
+          ...structuredClone(this.#activeCall.call),
+          latencyMs: Math.max(
+            0,
+            performance.now() - this.#activeCall.startedAt,
+          ),
+        };
   }
 
   #record(result: SemanticComparison, call: ModelCall): SemanticComparison {
@@ -51,12 +65,18 @@ export class LlmEvaluator implements Evaluator {
         promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         latencyMs: 0,
+        dispatched: false,
+        usageProvenance: "estimated",
       });
     }
     const prompt = buildEvaluatorPrompt(input);
     const startedAt = performance.now();
     const inputTokens = estimateModelTokens(`${prompt.system}\n${prompt.user}`);
-    const call = (outputTokens = 0): ModelCall => ({
+    const call = (
+      outputTokens = 0,
+      dispatched = false,
+      usageProvenance: ModelCall["usageProvenance"] = "estimated",
+    ): ModelCall => ({
       provider: this.provider.id,
       model: this.config.model,
       promptVersion: EVALUATOR_PROMPT_VERSION,
@@ -66,6 +86,8 @@ export class LlmEvaluator implements Evaluator {
         totalTokens: inputTokens + outputTokens,
       },
       latencyMs: Math.max(0, performance.now() - startedAt),
+      dispatched,
+      usageProvenance,
     });
     if (inputTokens > this.config.maxInputTokens) {
       this.#lastCall = call();
@@ -76,6 +98,10 @@ export class LlmEvaluator implements Evaluator {
       );
     }
     try {
+      this.#activeCall = {
+        startedAt,
+        call: call(0, true, "unknown"),
+      };
       const response = await new Promise<
         Awaited<ReturnType<GenerativeProvider["generate"]>>
       >((resolve, reject) => {
@@ -89,7 +115,7 @@ export class LlmEvaluator implements Evaluator {
             model: this.config.model,
             promptVersion: EVALUATOR_PROMPT_VERSION,
             deadlineMs: this.config.deadlineMs,
-            responseSchemaName: "SemanticComparison",
+            responseContract: SemanticComparisonContract,
           })
           .then(resolve, reject)
           .finally(() => clearTimeout(timer));
@@ -100,7 +126,10 @@ export class LlmEvaluator implements Evaluator {
         promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: response.usage,
         latencyMs: Math.max(0, performance.now() - startedAt),
+        dispatched: true,
+        usageProvenance: "reported",
       };
+      this.#activeCall = undefined;
       try {
         const result = parseSemanticComparison(response.text);
         return this.#record(result, completedCall);
@@ -114,10 +143,11 @@ export class LlmEvaluator implements Evaluator {
         );
       }
     } catch (cause) {
+      this.#activeCall = undefined;
       if (cause instanceof AdapterError) throw cause;
-      this.#lastCall = call();
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
+      this.#lastCall = call(0, true, timedOut ? "unknown" : "estimated");
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut ? "evaluator deadline expired" : "evaluator provider failed",

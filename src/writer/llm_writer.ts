@@ -4,6 +4,7 @@ import type {
   UpdateInput,
   Writer,
 } from "../schema";
+import { MemoryPatchContract } from "../schema";
 import { parseMemoryPatch } from "./parse";
 import { buildCompressPrompt, buildUpdatePrompt } from "./prompt";
 import {
@@ -17,6 +18,7 @@ import {
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
+  #activeCall: { startedAt: number; call: ModelCall } | undefined;
   readonly #callsByResult = new WeakMap<MemoryPatch, ModelCall>();
 
   constructor(
@@ -35,6 +37,18 @@ export class LlmWriter implements Writer {
     return call === undefined ? undefined : structuredClone(call);
   }
 
+  getActiveCall(): ModelCall | undefined {
+    return this.#activeCall === undefined
+      ? undefined
+      : {
+          ...structuredClone(this.#activeCall.call),
+          latencyMs: Math.max(
+            0,
+            performance.now() - this.#activeCall.startedAt,
+          ),
+        };
+  }
+
   async #call(prompt: { system: string; user: string }): Promise<MemoryPatch> {
     const startedAt = performance.now();
     const inputTokens = estimateModelTokens(`${prompt.system}\n${prompt.user}`);
@@ -43,12 +57,18 @@ export class LlmWriter implements Writer {
       outputTokens: 0,
       totalTokens: inputTokens,
     };
-    const call = (usage = emptyUsage): ModelCall => ({
+    const call = (
+      usage = emptyUsage,
+      dispatched = false,
+      usageProvenance: ModelCall["usageProvenance"] = "estimated",
+    ): ModelCall => ({
       provider: this.provider.id,
       model: this.config.model,
       promptVersion: this.config.promptVersion,
       usage,
       latencyMs: Math.max(0, performance.now() - startedAt),
+      dispatched,
+      usageProvenance,
     });
     if (inputTokens > this.config.maxInputTokens) {
       this.#lastCall = call();
@@ -59,6 +79,10 @@ export class LlmWriter implements Writer {
       );
     }
     let response: GenerateResponse;
+    this.#activeCall = {
+      startedAt,
+      call: call(emptyUsage, true, "unknown"),
+    };
     try {
       response = await new Promise<
         Awaited<ReturnType<GenerativeProvider["generate"]>>
@@ -73,15 +97,20 @@ export class LlmWriter implements Writer {
             model: this.config.model,
             promptVersion: this.config.promptVersion,
             deadlineMs: this.config.deadlineMs,
-            responseSchemaName: "MemoryPatch",
+            responseContract: MemoryPatchContract,
           })
           .then(resolve, reject)
           .finally(() => clearTimeout(timer));
       });
     } catch (cause) {
-      this.#lastCall = call();
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
+      this.#lastCall = call(
+        emptyUsage,
+        true,
+        timedOut ? "unknown" : "estimated",
+      );
+      this.#activeCall = undefined;
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut
@@ -91,7 +120,11 @@ export class LlmWriter implements Writer {
         cause,
       );
     }
-    const completedCall = { ...call(response.usage), model: response.model };
+    this.#activeCall = undefined;
+    const completedCall = {
+      ...call(response.usage, true, "reported"),
+      model: response.model,
+    };
     this.#lastCall = completedCall;
     try {
       const result = parseMemoryPatch(response.text);

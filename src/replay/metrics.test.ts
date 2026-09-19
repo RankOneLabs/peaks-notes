@@ -10,7 +10,10 @@ const policy = {
   uncoveredNoChangeMinConfidence: 0.8,
 };
 
-const label = (chunkId: string, gate: FixtureLabel["expectedNoUpdateGate"]): FixtureLabel => ({
+const label = (
+  chunkId: string,
+  gate: FixtureLabel["expectedNoUpdateGate"],
+): FixtureLabel => ({
   file: `fixtures/deterministic/${chunkId}.json`,
   chunkId,
   requiredCases: ["equivalent_restatement"],
@@ -101,4 +104,135 @@ test("inconclusive comparisons are outside agreement and miss denominators", () 
     agreementDenominator: 1,
     confirmedMissDenominator: 1,
   });
+});
+
+test("canonical call events count each provider request without aggregate duplication", () => {
+  const base = {
+    occurredAt: "2026-09-18T00:00:00.000Z",
+    chunkId: "chunk-calls" as never,
+    snapshotRevision: 0,
+    attemptId: "attempt-calls",
+  };
+  const calls: JournalEntry[] = [
+    ["relevance", 3],
+    ["relationships", 5],
+  ].map(([operation, inputTokens], index) => ({
+    ...base,
+    type: "model_call" as const,
+    id: `journal-call-${index}` as never,
+    callId: `call-${index}`,
+    role: "classifier" as const,
+    operation: operation as "relevance" | "relationships",
+    status: "succeeded" as const,
+    provider: "typesafe",
+    model: "jev-1.13.0",
+    promptVersion: "v1",
+    latencyMs: 2,
+    usage: {
+      inputTokens: inputTokens as number,
+      outputTokens: 1,
+      totalTokens: (inputTokens as number) + 1,
+    },
+    usageProvenance: "reported" as const,
+  }));
+  const report = computeMetrics({ entries: calls, labels: [], policy });
+  expect(report.model.classifier).toMatchObject({
+    calls: 2,
+    inputTokens: 8,
+    outputTokens: 2,
+    totalTokens: 10,
+  });
+});
+
+test("canonical call suppression is scoped by role, chunk, and attempt", () => {
+  const occurredAt = "2026-09-18T00:00:00.000Z";
+  const entries: JournalEntry[] = [
+    {
+      type: "model_call",
+      id: "journal-canonical-writer" as never,
+      occurredAt,
+      chunkId: "chunk-a" as never,
+      snapshotRevision: 0,
+      attemptId: "attempt-a",
+      callId: "call-writer-a",
+      role: "writer",
+      operation: "propose",
+      status: "succeeded",
+      provider: "openai",
+      model: "writer",
+      promptVersion: "v1",
+      latencyMs: 2,
+      usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+      usageProvenance: "reported",
+    },
+    {
+      type: "audit_record",
+      id: "journal-matching-aggregate" as never,
+      occurredAt,
+      chunkId: "chunk-a" as never,
+      snapshotRevision: 0,
+      attemptId: "attempt-a",
+      policy: { mode: "active", bypassAuditRate: 1, auditSeed: "seed" },
+      sampled: true,
+      proposedBypass: true,
+      outcome: "empty_patch",
+      writerUsage: { inputTokens: 30, outputTokens: 10, totalTokens: 40 },
+      writerLatencyMs: 20,
+    },
+    {
+      type: "audit_record",
+      id: "journal-other-attempt-aggregate" as never,
+      occurredAt,
+      chunkId: "chunk-b" as never,
+      snapshotRevision: 0,
+      attemptId: "attempt-b",
+      policy: { mode: "active", bypassAuditRate: 1, auditSeed: "seed" },
+      sampled: true,
+      proposedBypass: true,
+      outcome: "empty_patch",
+      writerUsage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 },
+      writerLatencyMs: 3,
+    },
+    {
+      type: "semantic_comparison",
+      id: "journal-legacy-evaluator" as never,
+      occurredAt,
+      chunkId: "chunk-legacy" as never,
+      snapshotRevision: 0,
+      comparison: { verdict: "equivalent", changes: [] },
+      evaluatorModel: {
+        provider: "openai",
+        model: "eval",
+        promptVersion: "v1",
+      },
+      evaluatorUsage: { inputTokens: 7, outputTokens: 1, totalTokens: 8 },
+      evaluatorLatencyMs: 4,
+    },
+  ];
+
+  const report = computeMetrics({ entries, labels: [], policy });
+  expect(report.model.writer).toMatchObject({
+    calls: 2,
+    inputTokens: 8,
+    outputTokens: 2,
+    totalTokens: 10,
+  });
+  expect(report.model.evaluator).toMatchObject({
+    calls: 1,
+    totalTokens: 8,
+  });
+});
+
+test("route-less journals retain legacy classifier-policy behavior", () => {
+  const labels = [label("legacy-no-update", "relevance")];
+  const report = computeMetrics({
+    entries: [noUpdate("legacy-no-update")],
+    labels,
+    policy,
+  });
+
+  expect(report.classifierPolicy).toBeUndefined();
+  expect(formatReport(report)).toContain(
+    "Classifier-policy coverage: unavailable for legacy journal",
+  );
 });

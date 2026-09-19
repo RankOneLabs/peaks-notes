@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { UpdateInput } from "../schema";
+import { MemoryPatchContract, type UpdateInput } from "../schema";
 import { LlmWriter } from "./llm_writer";
 import { parseMemoryPatch } from "./parse";
 import { AdapterError, createProvider } from "./provider";
@@ -170,24 +170,157 @@ test("OpenAI checks status before decoding and disables response storage", async
   expect(body?.store).toBe(false);
 });
 
-test("writer records the provider-resolved model", async () => {
-  const writer = new LlmWriter(
-    new RecordedProvider([
-      {
-        response: {
-          text: JSON.stringify({
-            replacements: [],
-            newTopics: [],
-            addProtected: [],
-            supersedeProtected: [],
-          }),
-          model: "resolved-model-2026-09-18",
-          usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+test("OpenAI sends a strict-compatible schema and restores optional fields", async () => {
+  let body: Record<string, unknown> | undefined;
+  const adapter = createProvider({ ...config, provider: "openai" }, (async (
+    _input,
+    init,
+  ) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(
+      JSON.stringify({
+        model: "model",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        output: [
+          {
+            content: [
+              {
+                text: JSON.stringify({
+                  replacements: [],
+                  newTopics: [],
+                  addProtected: [
+                    {
+                      id: "protected-1",
+                      kind: "constraint",
+                      text: "Keep this",
+                      sources: [
+                        { messageId: "message-1", start: null, end: null },
+                      ],
+                      status: "active",
+                      supersededBy: null,
+                    },
+                  ],
+                  supersedeProtected: [],
+                }),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+  }) as typeof fetch);
+
+  const response = await adapter.generate({
+    system: "system",
+    user: "user",
+    model: "model",
+    promptVersion: "test",
+    deadlineMs: 100,
+    responseContract: MemoryPatchContract,
+  });
+
+  expect(body).toMatchObject({
+    text: {
+      format: {
+        strict: true,
+        schema: {
+          properties: {
+            addProtected: {
+              items: {
+                required: expect.arrayContaining(["supersededBy"]),
+                properties: {
+                  sources: {
+                    items: {
+                      required: ["messageId", "start", "end"],
+                      properties: { start: { type: ["integer", "null"] } },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
-    ]),
-    config,
+    },
+  });
+  expect(parseMemoryPatch(response.text).addProtected[0]).toMatchObject({
+    id: "protected-1" as never,
+    kind: "constraint",
+    text: "Keep this",
+    sources: [{ messageId: "message-1" as never }],
+    status: "active",
+  });
+  expect(parseMemoryPatch(response.text).addProtected[0]).not.toHaveProperty(
+    "supersededBy",
   );
+});
+
+test("Anthropic sends the response contract through output_config", async () => {
+  let body: Record<string, unknown> | undefined;
+  const adapter = createProvider({ ...config, provider: "anthropic" }, (async (
+    _input,
+    init,
+  ) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(
+      JSON.stringify({
+        model: "model",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [
+          {
+            text: JSON.stringify({
+              replacements: [],
+              newTopics: [],
+              addProtected: [],
+              supersedeProtected: [],
+            }),
+          },
+        ],
+      }),
+    );
+  }) as typeof fetch);
+
+  await adapter.generate({
+    system: "system",
+    user: "user",
+    model: "model",
+    promptVersion: "test",
+    deadlineMs: 100,
+    responseContract: MemoryPatchContract,
+  });
+
+  expect(body).toMatchObject({
+    output_config: {
+      format: {
+        type: "json_schema",
+        schema: { type: "object" },
+      },
+    },
+  });
+  expect(JSON.stringify(body)).not.toContain("minLength");
+});
+
+test("writer records the provider-resolved model", async () => {
+  const provider = new RecordedProvider([
+    {
+      response: {
+        text: JSON.stringify({
+          replacements: [],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        }),
+        model: "resolved-model-2026-09-18",
+        usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+      },
+    },
+  ]);
+  const writer = new LlmWriter(provider, config);
   await writer.propose(input);
   expect(writer.getLastCall()?.model).toBe("resolved-model-2026-09-18");
+  expect(provider.requests[0]?.responseContract).toMatchObject({
+    name: "MemoryPatch",
+    version: 1,
+    schema: expect.objectContaining({ type: "object" }),
+  });
 });

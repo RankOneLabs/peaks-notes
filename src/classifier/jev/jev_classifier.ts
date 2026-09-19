@@ -6,7 +6,7 @@ import type {
   RelevanceResult,
 } from "../../schema";
 import { batchJevQuestions } from "./batch";
-import type { JevClient, JevUsage } from "./client";
+import { type JevClient, JevClientError, type JevUsage } from "./client";
 import {
   type AnswerTrace,
   normalizeRelationships,
@@ -17,10 +17,13 @@ import type { JevRequest, JevResponse } from "./wire";
 import { JEV_MODEL } from "./wire";
 
 export type JevCallTrace = {
+  operation: "relevance" | "relationships";
   model: typeof JEV_MODEL;
   requests: JevRequest[];
   answers: AnswerTrace[];
   usage: JevUsage;
+  requestUsage: JevUsage[];
+  requestStatuses?: Array<"succeeded" | "failed" | "timed_out">;
 };
 
 export class JevClassifier implements Classifier {
@@ -38,18 +41,30 @@ export class JevClassifier implements Classifier {
   }
 
   getCalls(): JevCallTrace[] {
-    return structuredClone(this.calls);
+    return this.#lastCall === undefined
+      ? []
+      : [structuredClone(this.#lastCall)];
+  }
+
+  drainCalls(): JevCallTrace[] {
+    const calls = structuredClone(this.calls);
+    this.calls.length = 0;
+    return calls;
   }
 
   #record(trace: JevCallTrace): void {
     this.#lastCall = trace;
-    this.calls.length = 0;
     this.calls.push(structuredClone(trace));
   }
 
   async #run(
+    operation: JevCallTrace["operation"],
     requests: JevRequest[],
-  ): Promise<{ responses: JevResponse[]; usage: JevUsage }> {
+  ): Promise<{
+    responses: JevResponse[];
+    usage: JevUsage;
+    requestUsage: JevUsage[];
+  }> {
     const responses: JevResponse[] = [];
     const usage: JevUsage = {
       inputTokens: 0,
@@ -57,15 +72,46 @@ export class JevClassifier implements Classifier {
       costUsd: 0,
       latencyMs: 0,
     };
+    const requestUsage: JevUsage[] = [];
     for (const request of requests) {
-      const result = await this.client.call(request);
+      let result: Awaited<ReturnType<JevClient["call"]>>;
+      try {
+        result = await this.client.call(request);
+      } catch (cause) {
+        const failedUsage =
+          cause instanceof JevClientError
+            ? cause.usage
+            : { inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 };
+        requestUsage.push(structuredClone(failedUsage));
+        this.#record({
+          operation,
+          model: JEV_MODEL,
+          requests: requests.slice(0, requestUsage.length),
+          answers: [],
+          usage: {
+            inputTokens: usage.inputTokens + failedUsage.inputTokens,
+            outputTokens: usage.outputTokens + failedUsage.outputTokens,
+            costUsd: usage.costUsd + failedUsage.costUsd,
+            latencyMs: usage.latencyMs + failedUsage.latencyMs,
+          },
+          requestUsage,
+          requestStatuses: [
+            ...requestUsage.slice(0, -1).map(() => "succeeded" as const),
+            cause instanceof JevClientError && cause.code === "timeout"
+              ? "timed_out"
+              : "failed",
+          ],
+        });
+        throw cause;
+      }
       responses.push(result.response);
+      requestUsage.push(structuredClone(result.usage));
       usage.inputTokens += result.usage.inputTokens;
       usage.outputTokens += result.usage.outputTokens;
       usage.costUsd += result.usage.costUsd;
       usage.latencyMs += result.usage.latencyMs;
     }
-    return { responses, usage };
+    return { responses, usage, requestUsage };
   }
 
   async scoreRelevance(input: RelevanceInput): Promise<RelevanceResult> {
@@ -76,13 +122,18 @@ export class JevClassifier implements Classifier {
       this.limits.maxInputTokens,
       this.limits.contextTokens,
     );
-    const { responses, usage } = await this.#run(requests);
+    const { responses, usage, requestUsage } = await this.#run(
+      "relevance",
+      requests,
+    );
     const normalized = normalizeRelevance(requests, responses);
     this.#record({
+      operation: "relevance",
       model: JEV_MODEL,
       requests,
       answers: normalized.trace,
       usage,
+      requestUsage,
     });
     return normalized.result;
   }
@@ -95,13 +146,18 @@ export class JevClassifier implements Classifier {
       this.limits.maxInputTokens,
       this.limits.contextTokens,
     );
-    const { responses, usage } = await this.#run(requests);
+    const { responses, usage, requestUsage } = await this.#run(
+      "relationships",
+      requests,
+    );
     const normalized = normalizeRelationships(requests, responses);
     this.#record({
+      operation: "relationships",
       model: JEV_MODEL,
       requests,
       answers: normalized.trace,
       usage,
+      requestUsage,
     });
     return normalized.result;
   }

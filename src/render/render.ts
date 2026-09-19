@@ -1,4 +1,5 @@
 import { applyPatch } from "../compact/apply_patch";
+import { validateCompressionPatch } from "../compact/validate_patch";
 import type {
   Memory,
   Message,
@@ -8,16 +9,9 @@ import type {
   Tokenizer,
   Writer,
 } from "../schema";
-import { MemoryPatchSchema } from "../schema";
 import { budgetResult } from "./budget";
+import { assembleContext, type RawContext } from "./context";
 import { ConservativeTokenizer } from "./estimate_tokens";
-import { recentWindow } from "./recent_window";
-import {
-  renderProtectedSection,
-  renderRecentSection,
-  renderTaskSection,
-  renderTopicsSection,
-} from "./sections";
 
 export const DEFAULT_SUMMARY_TOKEN_BUDGET = 4_000;
 export const DEFAULT_WARNING_THRESHOLD = 0.8;
@@ -34,35 +28,17 @@ export type RenderOptions = {
   recentMessageCount?: number;
 };
 
-const collectRecent = (recentRaw: RecentRaw, count?: number): Message[] => {
+const collectRecent = (recentRaw: RecentRaw, count?: number): RawContext => {
   const isCollection = (value: RecentRaw): value is readonly Message[] =>
     Array.isArray(value);
   const messages = isCollection(recentRaw) ? recentRaw : recentRaw.messages;
   const retained = isCollection(recentRaw)
     ? []
     : (recentRaw.retainedFailures ?? []);
-  const window = recentWindow(messages, count);
-  const ids = new Set(window.map(({ id }) => id));
-  return [
-    ...structuredClone([...retained]).filter(({ id }) => !ids.has(id)),
-    ...window,
-  ];
-};
-
-const contentFor = (
-  memory: Memory,
-  recent: readonly Message[],
-  taskContext: TaskContext,
-): { content: string; topics: string } => {
-  const topics = renderTopicsSection(memory);
   return {
-    topics,
-    content: [
-      renderTaskSection(taskContext),
-      renderProtectedSection(memory),
-      topics,
-      renderRecentSection(recent),
-    ].join("\n\n"),
+    messages,
+    retainedFailures: retained,
+    ...(count === undefined ? {} : { recentMessageCount: count }),
   };
 };
 
@@ -72,43 +48,16 @@ const compressedMemory = async (
   writer: Writer,
   maxSummaryTokens: number,
 ): Promise<Memory | undefined> => {
-  const candidate = MemoryPatchSchema.safeParse(
+  const candidate = validateCompressionPatch(
+    memory,
     await writer.compress({
       memory: structuredClone(memory),
       taskContext,
       maxSummaryTokens,
     }),
   );
-  if (!candidate.success) return undefined;
-  const patch = candidate.data;
-  if (
-    patch.newTopics.length > 0 ||
-    patch.addProtected.length > 0 ||
-    patch.supersedeProtected.length > 0
-  )
-    return undefined;
-  const topics = new Map(memory.topics.map((topic) => [topic.id, topic]));
-  if (
-    patch.replacements.some(({ topicId, expectedVersion, unresolved }) => {
-      const topic = topics.get(topicId);
-      if (topic === undefined || topic.version !== expectedVersion) return true;
-      const retained = new Set(unresolved);
-      return topic.unresolved.some((item) => !retained.has(item));
-    })
-  )
-    return undefined;
-  const allowedSources = new Set(
-    memory.topics.flatMap((topic) =>
-      topic.sources.map(({ messageId }) => messageId),
-    ),
-  );
-  if (
-    patch.replacements.some(({ sources }) =>
-      sources.some(({ messageId }) => !allowedSources.has(messageId)),
-    )
-  )
-    return undefined;
-  return applyPatch(memory, patch);
+  if (!candidate.ok) return undefined;
+  return applyPatch(memory, candidate.value);
 };
 
 export const renderContext = async (
@@ -125,9 +74,9 @@ export const renderContext = async (
   const summaryBudget =
     options.summaryBudgetTokens ?? DEFAULT_SUMMARY_TOKEN_BUDGET;
   const recent = collectRecent(recentRaw, options.recentMessageCount);
-  const first = contentFor(memory, recent, taskContext);
+  const first = assembleContext(memory, recent, taskContext, tokenizer);
   const warning =
-    tokenizer.count(first.topics).tokens >
+    first.summaryTokens >
     summaryBudget * (budget.warningThreshold ?? DEFAULT_WARNING_THRESHOLD);
   const firstResult = budgetResult(first.content, budget, tokenizer, warning);
   if (firstResult.status === "rendered" || options.writer === undefined)
@@ -145,9 +94,9 @@ export const renderContext = async (
     return firstResult;
   }
   if (compressed === undefined) return firstResult;
-  const second = contentFor(compressed, recent, taskContext);
+  const second = assembleContext(compressed, recent, taskContext, tokenizer);
   const secondWarning =
-    tokenizer.count(second.topics).tokens >
+    second.summaryTokens >
     summaryBudget * (budget.warningThreshold ?? DEFAULT_WARNING_THRESHOLD);
   return budgetResult(second.content, budget, tokenizer, secondWarning);
 };

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { assembleContext } from "../render/context";
 import type {
   Assessment,
   Chunk,
@@ -15,10 +16,12 @@ import type {
   JournalEntryId,
   Memory,
   MemoryPatch,
+  Message,
   ModelIdentifier,
   RelevanceResult,
   Result,
   TaskContext,
+  Tokenizer,
   Usage,
   Writer,
 } from "../schema";
@@ -45,7 +48,7 @@ import {
 import { protect } from "./protect";
 import { sampleAudit } from "./sample_audit";
 import { selectTopics } from "./select_topics";
-import { validatePatch } from "./validate_patch";
+import { validateCompressionPatch, validatePatch } from "./validate_patch";
 
 const hasChanges = (patch: MemoryPatch): boolean =>
   patch.replacements.length > 0 ||
@@ -62,6 +65,8 @@ type AdapterCall = {
   promptVersion: string;
   usage: Usage;
   latencyMs: number;
+  dispatched?: boolean | undefined;
+  usageProvenance?: "reported" | "estimated" | "unknown" | undefined;
 };
 
 const AdapterCallSchema = ModelIdentifierSchema.extend({
@@ -73,6 +78,8 @@ const AdapterCallSchema = ModelIdentifierSchema.extend({
     { message: "totalTokens must equal inputTokens plus outputTokens" },
   ),
   latencyMs: z.number().nonnegative(),
+  dispatched: z.boolean().optional(),
+  usageProvenance: z.enum(["reported", "estimated", "unknown"]).optional(),
 }).strict();
 
 const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
@@ -86,6 +93,33 @@ const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
   const parsed = AdapterCallSchema.safeParse(adapter.getLastCall());
   return parsed.success ? parsed.data : undefined;
 };
+
+const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
+  if (
+    typeof adapter !== "object" ||
+    adapter === null ||
+    !("getActiveCall" in adapter) ||
+    typeof adapter.getActiveCall !== "function"
+  )
+    return undefined;
+  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall());
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterCallFromCause = (cause: unknown): AdapterCall | undefined => {
+  if (typeof cause !== "object" || cause === null || !("usage" in cause))
+    return undefined;
+  const parsed = AdapterCallSchema.safeParse(cause.usage);
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterFailureType = (cause: unknown): "failed" | "timed_out" =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "code" in cause &&
+  cause.code === "timeout"
+    ? "timed_out"
+    : "failed";
 
 const adapterCallFor = (
   adapter: unknown,
@@ -109,6 +143,30 @@ const modelIdentifier = (call: AdapterCall): ModelIdentifier => ({
   promptVersion: call.promptVersion,
 });
 
+type JevTrace = {
+  operation: "relevance" | "relationships";
+  model: string;
+  requests: unknown[];
+  requestUsage: Array<{
+    inputTokens: number;
+    outputTokens: number;
+    latencyMs: number;
+  }>;
+  requestStatuses?: Array<"succeeded" | "failed" | "timed_out">;
+};
+
+const drainClassifierCalls = (classifier: unknown): JevTrace[] => {
+  if (
+    typeof classifier !== "object" ||
+    classifier === null ||
+    !("drainCalls" in classifier) ||
+    typeof classifier.drainCalls !== "function"
+  )
+    return [];
+  const calls = classifier.drainCalls();
+  return Array.isArray(calls) ? (calls as JevTrace[]) : [];
+};
+
 export type IngestDependencies = {
   store: IngestStore;
   classifier: Classifier;
@@ -122,8 +180,25 @@ export type IngestDependencies = {
   /** Evaluation-only budget for comparing an authoritative shadow patch. */
   shadowComparisonDeadlineMs?: number;
   writerDeadlineMs?: number;
+  /** Host context remaining after this commit; raw messages must include retained failures. */
+  /** Required by production callers. Optional only for backward-compatible test harnesses. */
+  budget?: IngestBudgetContext;
   /** Test/replay hook. Production attempts use opaque UUIDs. */
   attemptIdFactory?: () => string;
+};
+
+export type IngestBudgetContext = {
+  maxTokens: number;
+  summaryBudgetTokens: number;
+  tokenizer: Tokenizer;
+  rawMessages: readonly Message[];
+  retainedFailures?: readonly Message[];
+  recentMessageCount?: number;
+  compressionDeadlineMs?: number;
+};
+
+export type PipelineDependencies = IngestDependencies & {
+  budget: IngestBudgetContext;
 };
 
 /** Minimal persistence port consumed by orchestration; no store implementation dependency. */
@@ -159,6 +234,92 @@ const journalId = (
   suffix: string,
 ): JournalEntryId =>
   JournalEntryIdSchema.parse(`journal-${chunk.id}-${attempt.id}-${suffix}`);
+
+const appendClassifierCalls = async (
+  dependencies: IngestDependencies,
+  attempt: AttemptContext,
+  chunk: Chunk,
+  memory: Memory,
+): Promise<string | undefined> => {
+  const traces = drainClassifierCalls(dependencies.classifier);
+  let ordinal = 0;
+  for (const trace of traces) {
+    for (const [requestIndex, usage] of trace.requestUsage.entries()) {
+      ordinal += 1;
+      const result = await dependencies.store.appendJournal({
+        type: "model_call",
+        id: journalId(chunk, attempt, `model-classifier-${ordinal}`),
+        occurredAt: chunk.createdAt,
+        chunkId: chunk.id,
+        snapshotRevision: memory.revision,
+        attemptId: attempt.id,
+        callId: `${chunk.id}:${attempt.id}:classifier:${ordinal}`,
+        role: "classifier",
+        operation: trace.operation,
+        status: trace.requestStatuses?.[requestIndex] ?? "succeeded",
+        provider: "typesafe",
+        model: trace.model,
+        promptVersion:
+          trace.operation === "relationships"
+            ? "relationship-v2"
+            : "relevance-v1",
+        latencyMs: usage.latencyMs,
+        usage: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.inputTokens + usage.outputTokens,
+        },
+        usageProvenance:
+          (trace.requestStatuses?.[requestIndex] ?? "succeeded") === "succeeded"
+            ? "reported"
+            : "unknown",
+        requestIndex,
+      });
+      if (!result.ok) return result.error.message;
+    }
+  }
+  return undefined;
+};
+
+const appendAdapterCall = async (
+  dependencies: IngestDependencies,
+  attempt: AttemptContext,
+  chunk: Chunk,
+  memory: Memory,
+  role: "writer" | "evaluator",
+  operation: "propose" | "compress" | "compare",
+  call: AdapterCall | undefined,
+  status: "succeeded" | "failed" | "timed_out" = "succeeded",
+): Promise<string | undefined> => {
+  if (call === undefined) return undefined;
+  if (call.dispatched === false) return undefined;
+  if (
+    operation === "compare" &&
+    call.usage.totalTokens === 0 &&
+    call.latencyMs === 0
+  )
+    return undefined;
+  const suffix = `model-${role}-${operation}`;
+  const result = await dependencies.store.appendJournal({
+    type: "model_call",
+    id: journalId(chunk, attempt, suffix),
+    occurredAt: chunk.createdAt,
+    chunkId: chunk.id,
+    snapshotRevision: memory.revision,
+    attemptId: attempt.id,
+    callId: `${chunk.id}:${attempt.id}:${role}:${operation}`,
+    role,
+    operation,
+    status,
+    provider: call.provider,
+    model: call.model,
+    promptVersion: call.promptVersion,
+    latencyMs: call.latencyMs,
+    ...(call.usageProvenance === "unknown" ? {} : { usage: call.usage }),
+    usageProvenance: call.usageProvenance ?? "reported",
+  });
+  return result.ok ? undefined : result.error.message;
+};
 
 const effectiveMode = (dependencies: IngestDependencies): PipelineMode =>
   dependencies.mode ?? dependencies.executionPolicy?.mode ?? "shadow";
@@ -278,6 +439,7 @@ const retainAtGate = async (
     occurredAt: chunk.createdAt,
     chunkId: chunk.id,
     snapshotRevision: memory.revision,
+    attemptId: attempt.id,
     gate,
     outcome,
     reason,
@@ -311,6 +473,7 @@ const appendComparisonFailure = async (
       occurredAt: chunk.createdAt,
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
+      attemptId: attempt.id,
       outcome,
       reason,
     });
@@ -366,14 +529,53 @@ const appendSemanticComparison = async (
           : {
               type: "invalid_response" as const,
               reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
+              evaluatorCall,
             };
       },
-      (cause: unknown) => ({
-        type: "failed" as const,
-        reason: `semantic comparison failed: ${message(cause)}`,
-      }),
+      (cause: unknown) => {
+        const type = adapterFailureType(cause);
+        const failure = {
+          reason: `semantic comparison failed: ${message(cause)}`,
+          evaluatorCall: adapterCallFromCause(cause),
+        };
+        return type === "timed_out"
+          ? { type: "timed_out" as const, ...failure }
+          : { type: "failed" as const, ...failure };
+      },
     );
   const result = await withDeadline(operation, deadlineMs);
+  const evaluatorCall =
+    result.status === "timed_out"
+      ? activeAdapterCall(evaluator)
+      : result.value.evaluatorCall;
+  const callFailure = await appendAdapterCall(
+    dependencies,
+    attempt,
+    chunk,
+    memory,
+    "evaluator",
+    "compare",
+    evaluatorCall,
+    result.status === "timed_out"
+      ? "timed_out"
+      : result.value.type === "comparison"
+        ? "succeeded"
+        : result.value.type === "timed_out"
+          ? "timed_out"
+          : "failed",
+  );
+  if (callFailure !== undefined) {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "failed",
+      `evaluator call journal failed: ${callFailure}`,
+      "comparison-call-journal-failure",
+    );
+    return;
+  }
   if (result.status === "timed_out") {
     await appendComparisonFailure(
       dependencies,
@@ -410,13 +612,13 @@ const appendSemanticComparison = async (
 
   let journaled: Result<void, DomainError>;
   try {
-    const evaluatorCall = result.value.evaluatorCall;
     journaled = await dependencies.store.appendJournal({
       type: "semantic_comparison",
       id: journalId(chunk, attempt, "comparison"),
       occurredAt: chunk.createdAt,
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
+      attemptId: attempt.id,
       comparison: result.value.value,
       evaluatorModel:
         evaluatorCall === undefined
@@ -494,29 +696,94 @@ const appendAudit = async (
           value,
           writerCall: adapterCallFor(dependencies.writer, value),
         }))
-        .catch(() => ({ type: "failed" as const })),
+        .catch((cause: unknown) => {
+          const writerCall = adapterCallFromCause(cause);
+          return adapterFailureType(cause) === "timed_out"
+            ? { type: "timed_out" as const, writerCall }
+            : { type: "failed" as const, writerCall };
+        }),
       deadline,
     );
-    if (result.status === "timed_out") outcome = "timed_out";
-    else {
-      if (result.value.type === "failed") outcome = "failed";
-      else {
+    if (result.status === "timed_out") {
+      outcome = "timed_out";
+      auditWriterCall = activeAdapterCall(dependencies.writer);
+    } else {
+      if (result.value.type === "failed" || result.value.type === "timed_out") {
+        outcome = result.value.type;
+        auditWriterCall = result.value.writerCall;
+      } else {
         auditWriterCall = result.value.writerCall;
         const valid = validatePatch(memory, chunk, result.value.value);
         if (!valid.ok) outcome = "failed";
         else {
-          patch = valid.value;
-          outcome = hasChanges(patch) ? "patch" : "empty_patch";
+          if (!hasChanges(valid.value)) {
+            patch = valid.value;
+            outcome = "empty_patch";
+          } else {
+            const remainingMs = Math.max(
+              1,
+              deadline - (performance.now() - auditStartedAt),
+            );
+            const prepared = await prepareWithinBudget(
+              memory,
+              valid.value,
+              taskContext,
+              dependencies.budget === undefined
+                ? dependencies
+                : {
+                    ...dependencies,
+                    budget: {
+                      ...dependencies.budget,
+                      compressionDeadlineMs: remainingMs,
+                    },
+                  },
+            );
+            if (prepared.compressed) {
+              const callFailure = await appendAdapterCall(
+                dependencies,
+                attempt,
+                chunk,
+                memory,
+                "writer",
+                "compress",
+                lastAdapterCall(dependencies.writer),
+                prepared.status === "failed" ? "failed" : "succeeded",
+              );
+              if (callFailure !== undefined)
+                return `audit compression journal failed: ${callFailure}`;
+            }
+            if (prepared.status === "ready") {
+              patch = prepared.patch;
+              outcome = "patch";
+            } else outcome = "failed";
+          }
         }
       }
     }
   }
+  const auditCallFailure = await appendAdapterCall(
+    dependencies,
+    attempt,
+    chunk,
+    memory,
+    "writer",
+    "propose",
+    auditWriterCall,
+    outcome === "timed_out"
+      ? "timed_out"
+      : outcome === "failed"
+        ? "failed"
+        : "succeeded",
+  );
+  if (auditCallFailure !== undefined)
+    return `audit writer call journal failed: ${auditCallFailure}`;
   const journaled = await dependencies.store.appendJournal({
     type: "audit_record",
     id: journalId(chunk, attempt, "audit"),
     occurredAt: chunk.createdAt,
     chunkId: chunk.id,
     snapshotRevision: memory.revision,
+    attemptId: attempt.id,
     policy,
     sampled,
     proposedBypass: true,
@@ -549,6 +816,186 @@ const appendAudit = async (
     );
   }
   return undefined;
+};
+
+type BudgetPreparation =
+  | { status: "ready"; memory: Memory; patch: MemoryPatch; compressed: boolean }
+  | { status: "budget_exceeded"; required: number; compressed: boolean }
+  | { status: "failed"; reason: string; compressed: boolean };
+
+const topicContent = (topic: Memory["topics"][number]): string =>
+  JSON.stringify({
+    title: topic.title,
+    description: topic.description,
+    summary: topic.summary,
+    sources: topic.sources,
+    unresolved: topic.unresolved,
+  });
+
+/** Collapse proposal plus compression into one patch against the original snapshot. */
+const effectivePatch = (
+  before: Memory,
+  finalCandidate: Memory,
+  proposal: MemoryPatch,
+): MemoryPatch => {
+  const originals = new Map(before.topics.map((topic) => [topic.id, topic]));
+  const replacements: MemoryPatch["replacements"] = [];
+  const newTopics: MemoryPatch["newTopics"] = [];
+  for (const topic of finalCandidate.topics) {
+    const original = originals.get(topic.id);
+    if (original === undefined) {
+      newTopics.push({
+        title: topic.title,
+        description: topic.description,
+        summary: topic.summary,
+        sources: structuredClone(topic.sources),
+        unresolved: [...topic.unresolved],
+      });
+    } else if (topicContent(original) !== topicContent(topic)) {
+      replacements.push({
+        topicId: original.id,
+        expectedVersion: original.version,
+        title: topic.title,
+        description: topic.description,
+        summary: topic.summary,
+        sources: structuredClone(topic.sources),
+        unresolved: [...topic.unresolved],
+      });
+    }
+  }
+  return {
+    replacements,
+    newTopics,
+    addProtected: structuredClone(proposal.addProtected),
+    supersedeProtected: structuredClone(proposal.supersedeProtected),
+  };
+};
+
+const prepareWithinBudget = async (
+  before: Memory,
+  proposal: MemoryPatch,
+  taskContext: TaskContext,
+  dependencies: IngestDependencies,
+): Promise<BudgetPreparation> => {
+  const budget = dependencies.budget;
+  if (budget === undefined)
+    return {
+      status: "ready",
+      memory: applyPatch(before, proposal),
+      patch: proposal,
+      compressed: false,
+    };
+  if (
+    !Number.isSafeInteger(budget.maxTokens) ||
+    budget.maxTokens <= 0 ||
+    !Number.isSafeInteger(budget.summaryBudgetTokens) ||
+    budget.summaryBudgetTokens <= 0 ||
+    typeof budget.tokenizer?.count !== "function"
+  ) {
+    return {
+      status: "failed",
+      reason: "invalid ingest budget context",
+      compressed: false,
+    };
+  }
+  const raw = {
+    messages: budget.rawMessages,
+    ...(budget.retainedFailures === undefined
+      ? {}
+      : { retainedFailures: budget.retainedFailures }),
+    ...(budget.recentMessageCount === undefined
+      ? {}
+      : { recentMessageCount: budget.recentMessageCount }),
+  };
+  const candidate = applyPatch(before, proposal);
+  const first = assembleContext(candidate, raw, taskContext, budget.tokenizer);
+  if (
+    first.totalTokens <= budget.maxTokens &&
+    first.summaryTokens <= budget.summaryBudgetTokens
+  ) {
+    return {
+      status: "ready",
+      memory: candidate,
+      patch: proposal,
+      compressed: false,
+    };
+  }
+  if (first.nonSummaryTokens >= budget.maxTokens) {
+    return {
+      status: "budget_exceeded",
+      required: first.totalTokens,
+      compressed: false,
+    };
+  }
+  const target = Math.min(
+    budget.summaryBudgetTokens,
+    budget.maxTokens - first.nonSummaryTokens,
+  );
+  if (target <= 0)
+    return {
+      status: "budget_exceeded",
+      required: first.totalTokens,
+      compressed: false,
+    };
+  const deadline =
+    budget.compressionDeadlineMs ??
+    dependencies.writerDeadlineMs ??
+    DEFAULT_WRITER_DEADLINE_MS;
+  const compressed = await withDeadline(
+    Promise.resolve()
+      .then(() =>
+        dependencies.writer.compress({
+          memory: structuredClone(candidate),
+          taskContext,
+          maxSummaryTokens: target,
+        }),
+      )
+      .then((value) => ({ type: "patch" as const, value }))
+      .catch((cause: unknown) => ({ type: "failed" as const, cause })),
+    deadline,
+  );
+  if (compressed.status === "timed_out")
+    return {
+      status: "failed",
+      reason: `compression timed out after ${deadline}ms`,
+      compressed: true,
+    };
+  if (compressed.value.type === "failed")
+    return {
+      status: "failed",
+      reason: `compression failed: ${message(compressed.value.cause)}`,
+      compressed: true,
+    };
+  const valid = validateCompressionPatch(candidate, compressed.value.value);
+  if (!valid.ok)
+    return {
+      status: "failed",
+      reason: `invalid compression patch: ${valid.error.message}`,
+      compressed: true,
+    };
+  const compressedCandidate = applyPatch(candidate, valid.value);
+  const second = assembleContext(
+    compressedCandidate,
+    raw,
+    taskContext,
+    budget.tokenizer,
+  );
+  if (
+    second.totalTokens > budget.maxTokens ||
+    second.summaryTokens > budget.summaryBudgetTokens
+  )
+    return {
+      status: "budget_exceeded",
+      required: second.totalTokens,
+      compressed: true,
+    };
+  const patch = effectivePatch(before, compressedCandidate, proposal);
+  return {
+    status: "ready",
+    memory: applyPatch(before, patch),
+    patch,
+    compressed: true,
+  };
 };
 
 export const ingest = async (
@@ -614,6 +1061,50 @@ export const ingest = async (
           dependencies.classifier,
           dependencies.classifierPolicy,
         );
+  const classifierCallFailure = await appendClassifierCalls(
+    dependencies,
+    attempt,
+    chunk,
+    memory,
+  );
+  if (classifierCallFailure !== undefined)
+    return retained(
+      chunk,
+      `classifier call journal failed: ${classifierCallFailure}`,
+    );
+  const forcedWriter = protectedResult.value.length > 0;
+  const routingJournaled = await dependencies.store.appendJournal({
+    type: "routing_decision",
+    id: journalId(chunk, attempt, "routing"),
+    occurredAt: chunk.createdAt,
+    chunkId: chunk.id,
+    snapshotRevision: memory.revision,
+    attemptId: attempt.id,
+    effectiveMode: mode,
+    classifierPolicy: dependencies.classifierPolicy,
+    route:
+      classification.failure !== undefined
+        ? "unavailable"
+        : (classification.routing?.kind ?? "writer"),
+    reason:
+      classification.failure?.message ??
+      classification.routing?.reason ??
+      "writer",
+    affectedTopicIds: classification.routing?.affectedTopicIds ?? [],
+    protectionOverride:
+      forcedWriter && classification.routing?.kind === "bypass",
+    ...(classification.relevance === undefined
+      ? {}
+      : { relevance: classification.relevance }),
+    ...(classification.assessment === undefined
+      ? {}
+      : { assessment: classification.assessment }),
+  });
+  if (!routingJournaled.ok)
+    return retained(
+      chunk,
+      `routing journal failed: ${routingJournaled.error.message}`,
+    );
   if (mode === "active" && classification.failure !== undefined) {
     return retainAtGate(
       dependencies,
@@ -634,6 +1125,7 @@ export const ingest = async (
       occurredAt: chunk.createdAt,
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
+      attemptId: attempt.id,
       policy: executionPolicy(dependencies),
       sampled: false,
       proposedBypass: true,
@@ -646,11 +1138,111 @@ export const ingest = async (
       );
   }
 
-  const forcedWriter = protectedResult.value.length > 0;
   const action = forcedWriter
     ? "writer"
     : modeAction(mode, classification.routing);
   if (action === "bypass") {
+    const emptyPatch: MemoryPatch = {
+      replacements: [],
+      newTopics: [],
+      addProtected: [],
+      supersedeProtected: [],
+    };
+    const prepared = await prepareWithinBudget(
+      memory,
+      emptyPatch,
+      taskContext,
+      dependencies,
+    );
+    if (prepared.compressed) {
+      const callFailure = await appendAdapterCall(
+        dependencies,
+        attempt,
+        chunk,
+        memory,
+        "writer",
+        "compress",
+        lastAdapterCall(dependencies.writer),
+        prepared.status === "failed" ? "failed" : "succeeded",
+      );
+      if (callFailure !== undefined)
+        return retained(
+          chunk,
+          `compression call journal failed: ${callFailure}`,
+        );
+    }
+    if (prepared.status === "failed")
+      return retainAtGate(
+        dependencies,
+        attempt,
+        chunk,
+        memory,
+        "budget",
+        "failure",
+        prepared.reason,
+      );
+    if (prepared.status === "budget_exceeded") {
+      const journaled = await dependencies.store.appendJournal({
+        type: "gate_decision",
+        id: journalId(chunk, attempt, "gate-budget"),
+        occurredAt: chunk.createdAt,
+        chunkId: chunk.id,
+        snapshotRevision: memory.revision,
+        attemptId: attempt.id,
+        gate: "budget",
+        outcome: "failure",
+        reason: `candidate requires ${prepared.required} tokens; budget is ${dependencies.budget?.maxTokens}`,
+        effectiveMode: effectiveMode(dependencies),
+        classifierPolicy: dependencies.classifierPolicy,
+        executionPolicy: executionPolicy(dependencies),
+      });
+      if (!journaled.ok)
+        return retained(
+          chunk,
+          `budget journal failed: ${journaled.error.message}`,
+        );
+      return {
+        status: "budget_exceeded",
+        chunkId: chunk.id,
+        budget: dependencies.budget?.maxTokens ?? 1,
+        required: prepared.required,
+      };
+    }
+    if (hasChanges(prepared.patch)) {
+      const after = applyPatch(memory, prepared.patch, chunk.id);
+      const call = lastAdapterCall(dependencies.writer);
+      const commit = buildCommit(memory, after, chunk, prepared.patch, {
+        ...(classification.relevance === undefined
+          ? {}
+          : { relevance: classification.relevance }),
+        ...(classification.assessment === undefined
+          ? {}
+          : { assessment: classification.assessment }),
+        reason: "budget compression during classifier bypass",
+        attemptId: attempt.id,
+        ...(call === undefined
+          ? {}
+          : {
+              writerModel: modelIdentifier(call),
+              writerUsage: call.usage,
+              writerLatencyMs: call.latencyMs,
+            }),
+      });
+      const result = await dependencies.store.commit(memory.revision, commit);
+      if (!result.ok)
+        return retained(chunk, `commit failed: ${result.error.message}`);
+      return result.value.status === "replayed"
+        ? {
+            status: "replayed",
+            chunkId: chunk.id,
+            revision: result.value.revision,
+          }
+        : {
+            status: "committed",
+            chunkId: chunk.id,
+            revision: result.value.revision,
+          };
+    }
     const policy = executionPolicy(dependencies);
     const sampled = sampleAudit(
       chunk.id,
@@ -674,6 +1266,7 @@ export const ingest = async (
         ? {}
         : { assessment: classification.assessment }),
       reason: `${classification.routing?.reason ?? "bypass"}; policy=${JSON.stringify(dependencies.classifierPolicy)}`,
+      attemptId: attempt.id,
     });
     const result = await dependencies.store.commit(memory.revision, commit);
     if (!result.ok)
@@ -721,6 +1314,17 @@ export const ingest = async (
     writerDeadline,
   );
   if (proposalResult.status === "timed_out") {
+    await appendAdapterCall(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "writer",
+      "propose",
+      activeAdapterCall(dependencies.writer) ??
+        lastAdapterCall(dependencies.writer),
+      "timed_out",
+    );
     return retainAtGate(
       dependencies,
       attempt,
@@ -732,6 +1336,22 @@ export const ingest = async (
     );
   }
   if (proposalResult.value.type === "failed") {
+    const callJournalFailure = await appendAdapterCall(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "writer",
+      "propose",
+      adapterCallFromCause(proposalResult.value.cause) ??
+        lastAdapterCall(dependencies.writer),
+      "failed",
+    );
+    if (callJournalFailure !== undefined)
+      return retained(
+        chunk,
+        `writer call journal failed: ${callJournalFailure}`,
+      );
     return retainAtGate(
       dependencies,
       attempt,
@@ -743,6 +1363,21 @@ export const ingest = async (
     );
   }
   const proposed = proposalResult.value.value;
+  const proposalCall = adapterCallFor(dependencies.writer, proposed);
+  const proposalCallFailure = await appendAdapterCall(
+    dependencies,
+    attempt,
+    chunk,
+    memory,
+    "writer",
+    "propose",
+    proposalCall,
+  );
+  if (proposalCallFailure !== undefined)
+    return retained(
+      chunk,
+      `writer call journal failed: ${proposalCallFailure}`,
+    );
   const proposedValid = validatePatch(memory, chunk, proposed);
   if (!proposedValid.ok) {
     return retainAtGate(
@@ -791,14 +1426,77 @@ export const ingest = async (
       `patch escalation: ${valid.error.message}`,
     );
   }
-  const changed = hasChanges(valid.value);
-  const after = changed ? applyPatch(memory, valid.value, chunk.id) : undefined;
-  const writerCall = lastAdapterCall(dependencies.writer);
+  const prepared = await prepareWithinBudget(
+    memory,
+    valid.value,
+    taskContext,
+    dependencies,
+  );
+  if (prepared.compressed) {
+    const compressionCallFailure = await appendAdapterCall(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "writer",
+      "compress",
+      lastAdapterCall(dependencies.writer),
+      prepared.status === "failed" ? "failed" : "succeeded",
+    );
+    if (compressionCallFailure !== undefined)
+      return retained(
+        chunk,
+        `compression call journal failed: ${compressionCallFailure}`,
+      );
+  }
+  if (prepared.status === "failed") {
+    return retainAtGate(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "budget",
+      "failure",
+      prepared.reason,
+    );
+  }
+  if (prepared.status === "budget_exceeded") {
+    const journaled = await dependencies.store.appendJournal({
+      type: "gate_decision",
+      id: journalId(chunk, attempt, "gate-budget"),
+      occurredAt: chunk.createdAt,
+      chunkId: chunk.id,
+      snapshotRevision: memory.revision,
+      attemptId: attempt.id,
+      gate: "budget",
+      outcome: "failure",
+      reason: `candidate requires ${prepared.required} tokens; budget is ${dependencies.budget?.maxTokens}`,
+      effectiveMode: effectiveMode(dependencies),
+      classifierPolicy: dependencies.classifierPolicy,
+      executionPolicy: executionPolicy(dependencies),
+    });
+    if (!journaled.ok)
+      return retained(
+        chunk,
+        `budget journal failed: ${journaled.error.message}`,
+      );
+    return {
+      status: "budget_exceeded",
+      chunkId: chunk.id,
+      budget: dependencies.budget?.maxTokens ?? 1,
+      required: prepared.required,
+    };
+  }
+  const changed = hasChanges(prepared.patch);
+  const after = changed
+    ? applyPatch(memory, prepared.patch, chunk.id)
+    : undefined;
+  const writerCall = proposalCall ?? lastAdapterCall(dependencies.writer);
   const commit = buildCommit(
     memory,
     after,
     chunk,
-    changed ? valid.value : undefined,
+    changed ? prepared.patch : undefined,
     {
       ...(classification.relevance === undefined
         ? {}
@@ -819,6 +1517,7 @@ export const ingest = async (
             writerUsage: writerCall.usage,
             writerLatencyMs: writerCall.latencyMs,
           }),
+      attemptId: attempt.id,
     },
   );
   const result = await dependencies.store.commit(memory.revision, commit);
@@ -856,7 +1555,7 @@ export const ingest = async (
 };
 
 export class CompactPipeline {
-  constructor(readonly dependencies: IngestDependencies) {}
+  constructor(readonly dependencies: PipelineDependencies) {}
 
   ingest(chunk: Chunk, taskContext: TaskContext): Promise<IngestResult> {
     return ingest(chunk, taskContext, this.dependencies);

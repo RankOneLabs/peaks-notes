@@ -8,7 +8,9 @@ export const RELATIONSHIP_TEMPLATE =
   "Classify how the transcript relates to the selected topic. If it both adds and changes information, choose changing_info.";
 
 export const UNCOVERED_TEMPLATE =
-  "Classify any meaningful transcript content not covered by the selected topics, using the complete catalog to distinguish a new topic from a routing miss.";
+  "Classify any meaningful transcript content not covered by the selected topics. Content related to an unselected catalog topic is a routing miss and must be uncertain, never none. Use the complete catalog only to distinguish a genuinely new topic from a routing miss.";
+
+export const RELATIONSHIP_TEMPLATE_VERSION = "relationship-v2";
 
 export const UNCOVERED_QUESTION_ID = "uncovered";
 
@@ -101,7 +103,18 @@ export const relationshipQuestions = (
       [UNCOVERED_QUESTION_ID]: {
         type: "choice",
         instructions: [
+          `Template version: ${RELATIONSHIP_TEMPLATE_VERSION}`,
           UNCOVERED_TEMPLATE,
+          "<selected-topic-evidence-data>",
+          JSON.stringify(
+            input.selectedTopics.map(({ id, title, summary, unresolved }) => ({
+              id,
+              title,
+              summary,
+              unresolved,
+            })),
+          ),
+          "</selected-topic-evidence-data>",
           "<complete-topic-catalog-data>",
           JSON.stringify(input.topicCatalog),
           "</complete-topic-catalog-data>",

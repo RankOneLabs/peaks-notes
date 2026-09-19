@@ -47,7 +47,7 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
         version: 1,
         summary: "Exact complete summary 192.168.1.2",
         sources: [],
-        unresolved: [],
+        unresolved: ["Keep this uncertainty"],
       },
     ],
     topicCatalog: [
@@ -64,10 +64,15 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
     type: "choice",
     instructions: expect.stringContaining("Exact complete summary 192.168.1.2"),
   });
+  const uncoveredInstructions = built.questions.uncovered?.instructions;
   expect(built.questions.uncovered).toMatchObject({
     type: "choice",
     instructions: expect.stringContaining("topic-network"),
   });
+  expect(String(uncoveredInstructions)).toContain(
+    "Exact complete summary 192.168.1.2",
+  );
+  expect(String(uncoveredInstructions)).toContain("Keep this uncertainty");
 });
 
 test("the uncovered question id cannot collide with a selected topic", () => {
