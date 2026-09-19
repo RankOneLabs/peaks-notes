@@ -2,25 +2,26 @@ import { z } from "zod";
 
 export const JEV_MODEL = "jev-1.13.0" as const;
 
-const CriterionSchema = z
-  .object({
-    name: z.string().min(1),
-    description: z.string().min(1),
-  })
-  .strict();
-
 export const JevNoulQuestionSchema = z
   .object({
     type: z.literal("noul"),
-    question: z.string().min(1),
+    instructions: z.string().min(1),
+    criteria: z
+      .object({ true: z.string().min(1), false: z.string().min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 
 export const JevChoiceQuestionSchema = z
   .object({
     type: z.literal("choice"),
-    question: z.string().min(1),
-    criteria: z.array(CriterionSchema).min(2),
+    instructions: z.string().min(1),
+    criteria: z
+      .record(z.string().min(1), z.string().min(1))
+      .refine((criteria) => Object.keys(criteria).length >= 2, {
+        message: "choice requires at least two criteria",
+      }),
   })
   .strict();
 
@@ -42,7 +43,7 @@ export type JevRequest = z.infer<typeof JevRequestSchema>;
 export const JevNoulAnswerSchema = z
   .object({
     type: z.literal("noul"),
-    probability: z.number().min(0).max(1),
+    noul: z.number().min(0).max(1),
   })
   .strict();
 
@@ -86,7 +87,7 @@ export const parseJevResponse = (
     if (answer.type !== question.type)
       throw new Error(`answer type mismatch for question id: ${id}`);
     if (answer.type === "choice" && question.type === "choice") {
-      const allowed = new Set(question.criteria.map(({ name }) => name));
+      const allowed = new Set(Object.keys(question.criteria));
       if (!allowed.has(answer.choice))
         throw new Error(`choice outside criteria for question id: ${id}`);
       if (

@@ -12,7 +12,29 @@ Verified 18 September 2026. This document records provider facts needed by a lat
 - Typed output guarantees the response shape, not factual correctness. The core must validate IDs, numeric ranges, completeness, and policy thresholds and must escalate incomplete responses.
 - Provider model names, limits, credentials, retry behavior, and request/response normalization belong inside the adapter. The classifier contracts in `src/schema/` deliberately do not expose them.
 
-These facts support two sequential logical passes in the v0.4 spec: independent Score questions for per-topic relevance, followed by independent Choice questions for selected-topic relationships and global uncovered content. Whether a future provider request can batch all questions in one call is an adapter concern and must not collapse those logical passes.
+The implemented adapter uses Noul (rather than Score) for relevance, so its value is directly the probability of “yes.” It preserves two sequential logical passes: Noul questions for per-topic relevance, followed by Choice questions for selected-topic relationships and global uncovered content. Requests use `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer`, and the pinned model `jev-1.13.0`.
+
+## Exact question templates
+
+The shared state contains the trusted current task and compaction instructions, followed by the complete chunk inside `<transcript-data>` delimiters. Relationship state also contains protected records inside `<protected-records-data>` delimiters. Transcript text is data, never model instruction text.
+
+Each relevance question is keyed by the topic ID and uses:
+
+> Does any meaningful part of the transcript chunk relate to this topic? Score relevance strength, including brief corrections, rather than the fraction of the chunk devoted to it.
+
+It then includes `Topic id`, `Topic title`, and `Routing description`. The Noul true criterion is “At least one meaningful fact, correction, constraint, or status update relates to this topic.” The false criterion is “No meaningful part relates to this topic.”
+
+Each selected-topic relationship question is keyed by topic ID, contains that topic's complete summary, and uses:
+
+> Classify how the transcript relates to the selected topic. If it both adds and changes information, choose changing_info.
+
+Its criteria are `new_info`, `changing_info`, and `same_info`, using the definitions in specification §5C. The `uncovered` question contains the complete topic catalog and uses:
+
+> Classify any meaningful transcript content not covered by the selected topics, using the complete catalog to distinguish a new topic from a routing miss.
+
+Its criteria are `none`, `new_topic`, `transient`, and `uncertain`.
+
+Questions are split across requests at the 32,000 input-token bound while retaining the shared state in every request; no question is omitted. Shared state or an individual state-plus-question that cannot fit returns `incomplete_input`. Relevance and relationship questions are never combined. HTTP 429 and 529 responses use exponential backoff within the configured call deadline.
 
 ## Pages checked
 
