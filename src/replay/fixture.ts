@@ -48,7 +48,6 @@ export const DeterministicFixtureSchema = z
       .object({
         maxTokens: z.number().int().positive(),
         summaryBudgetTokens: z.number().int().positive().default(4_000),
-        recentMessageCount: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),

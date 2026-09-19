@@ -124,7 +124,6 @@ describe("deterministic fixtures", () => {
           maxTokens: fixture.budget?.maxTokens ?? 100_000,
           summaryBudgetTokens: fixture.budget?.summaryBudgetTokens ?? 4_000,
           tokenizer: new ConservativeTokenizer(),
-          rawMessages: [],
         },
         ...(fixture.auditDeadlineMs === undefined
           ? {}
@@ -1573,7 +1572,6 @@ const budget = {
   maxTokens: 1_000,
   summaryBudgetTokens: 10,
   tokenizer: longTokenizer,
-  rawMessages: [],
 };
 const replaceNetwork = (summary: string, expectedVersion = 1) =>
   JSON.stringify({

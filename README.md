@@ -1,6 +1,6 @@
 # Peaks
 
-An MVP dynamic topic compactor that maintains compact, topic-organized conversation memory while preserving an append-only source archive and audit journal.
+An MVP dynamic topic compactor. It reads a conversation as it happens and maintains a separate, topic-organized summary of it, backed by an append-only source archive and audit journal. It never modifies the conversation it reads.
 
 The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md).
 
@@ -38,7 +38,7 @@ Stub and recorded replays need no configuration. Live adapters read the environm
 
 ## Ingestion
 
-Production ingestion must provide a host budget after reserving tokens for system instructions, tools, and the response. `rawMessages` is the exact raw context that will remain after a successful commit, including older retained failures; do not include messages already represented only by topic summaries.
+Production ingestion must provide a summary budget: `maxTokens` bounds the whole rendered summary (protected records plus topic summaries), and `summaryBudgetTokens` bounds its topic section.
 
 ```ts
 const pipeline = new CompactPipeline({
@@ -49,15 +49,13 @@ const pipeline = new CompactPipeline({
   classifierPolicy,
   executionPolicy, // defaults to shadow
   budget: {
-    maxTokens: availableContextTokens,
+    maxTokens: 6_000,
     summaryBudgetTokens: 4_000,
-    tokenizer: targetModelTokenizer,
-    rawMessages: recentMessagesAfterCommit,
-    retainedFailures,
+    tokenizer: readerModelTokenizer,
   },
 });
 ```
 
 The pipeline starts in shadow mode: the writer assesses every chunk and its validated patch is committed, while classifier routing is only recorded. `executionPolicy.mode: "active"` lets the classifier bypass the writer, with sampled bypass audits at `bypassAuditRate`. The separate pipeline option `mode: "baseline"` is the always-writer comparison that skips classification. The evaluator is optional; without it, shadow comparisons and audits record no semantic verdict.
 
-Ingest assembles and counts the same task, active protected records, topic summaries, unresolved issues, source provenance, and raw content as `renderContext`. It rejects or compresses an over-budget candidate before the atomic memory/processed-marker commit. Render-time compression remains an ephemeral display facility and never changes authoritative memory.
+After each commit, `renderSummary(memory, budget)` renders the summary: active protected records, then topic summaries with unresolved issues and source provenance. Ingest counts that same rendering, so it rejects or compresses an over-budget candidate before the atomic memory/processed-marker commit. Render-time compression is an ephemeral display facility and never changes authoritative memory.

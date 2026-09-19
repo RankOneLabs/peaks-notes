@@ -74,7 +74,6 @@ const dependencies = (
     maxTokens: 1_000,
     summaryBudgetTokens: 10,
     tokenizer,
-    rawMessages: [],
   },
   attemptIdFactory: () => attemptId,
 });

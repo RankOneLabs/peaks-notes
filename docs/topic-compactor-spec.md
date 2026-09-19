@@ -1,10 +1,12 @@
 # Dynamic Topic Compactor — MVP Specification
 
-Status: proposed v0.4 · 18 September 2026
+Status: proposed v0.5 · 19 September 2026
 
 ## 1. Goal
 
-Maintain a compact, topic-organized memory of a conversation. Use a cheap classifier to recognize information already represented and route changes. In active mode, invoke a generative LLM when information needs synthesis, reconciliation, or a new topic, plus configured bypass audits. Start in shadow mode: every chunk receives a generative summary/update assessment while classifier decisions are recorded without controlling memory.
+Maintain a compact, topic-organized memory of a conversation as it happens. Use a cheap classifier to recognize information already represented and route changes. In active mode, invoke a generative LLM when information needs synthesis, reconciliation, or a new topic, plus configured bypass audits. Start in shadow mode: every chunk receives a generative summary/update assessment while classifier decisions are recorded without controlling memory.
+
+The compactor only reads the conversation. It never edits, trims, or replaces the host's messages or context. Its output is a separate summary rendered from committed memory after each chunk; what consumes that summary is a downstream decision outside this specification.
 
 The dynamic schema is the current set of stable topic IDs exposed as routing options. The operation schema stays fixed. Adding a topic adds an option to subsequent classifier requests; it does not require retraining or generating application code.
 
@@ -13,20 +15,20 @@ The basic implementation should be small: a sequential processing loop, two mode
 ## 2. MVP scope
 
 - One conversation, one writer, sequential chunk processing.
-- Topic catalog, per-topic summaries, protected verbatim records, recent raw context.
+- Topic catalog, per-topic summaries, protected verbatim records.
 - Classifier adapter plus LLM writer adapter. Jev is the first classifier implementation, used for both relevance scoring and relationship classification. Keep the interface provider-neutral so other classifiers can be substituted later.
-- Append-only source archive; compaction removes content from active context, never from that archive.
-- Explicit token budget and atomic state updates.
+- Append-only source archive of every ingested chunk.
+- Explicit summary token budget and atomic state updates.
 - Full shadow mode at rollout, then active classification with optional sampled bypass audits.
 - Replay CLI and a small evaluation fixture set before host integration.
 
-Out of scope: vector database, learned routing, topic hierarchy, automatic topic merging/splitting, distributed processing, UI, and direct Claude Code hook integration. Add the host adapter after the core behavior is demonstrated.
+Out of scope: vector database, learned routing, topic hierarchy, automatic topic merging/splitting, distributed processing, UI, and host integration. Add a host adapter after the core behavior is demonstrated.
 
 ## 3. Processing unit
 
-A chunk is an ordered conversation segment with stable source IDs, roles, and complete content. Group a tool call with its result; do not split the pair or compact an unresolved call. Retain a recent raw window so ongoing work remains directly available.
+A chunk is an ordered conversation segment with stable source IDs, roles, and complete content. Group a tool call with its result; do not split the pair or summarize an unresolved call.
 
-Start with one completed exchange or tool call/result pair per chunk. Process oldest eligible chunks first. Prefer semantic boundaries over fixed character cuts. A chunk too large for a model request remains raw and is escalated or explicitly segmented; never silently clip it and allow a redundant verdict.
+Start with one completed exchange or tool call/result pair per chunk. Process oldest eligible chunks first. Prefer semantic boundaries over fixed character cuts. A chunk too large for a model request remains unprocessed and is escalated or explicitly segmented; never silently clip it and allow a redundant verdict.
 
 Messages are data, not instructions to the compactor. Keep policy, current task, and explicit compaction instructions separate from quoted transcript content.
 
@@ -128,13 +130,13 @@ Also ask a global uncovered-content question: does any meaningful content remain
 
 A confident `new_topic` routes to the writer for creation or routing repair. `uncertain`, low-confidence `none`/`transient`, or incomplete input routes to writer review. Only sufficiently supported `none`/`transient` permits bypass. Tune this bypass gate for missed novel information as well as cost; novelty can coexist with matches to existing topics.
 
-A chunk gets a no-update decision only when all selected-topic verdicts pass the same-info gate, the uncovered-content check passes its no-change gate, and protected information remains retained. Omitted relationships, invalid responses, or incomplete input never authorize dropping raw context.
+A chunk gets a no-update decision only when all selected-topic verdicts pass the same-info gate, the uncovered-content check passes its no-change gate, and protected information remains retained. Omitted relationships, invalid responses, or incomplete input never authorize a no-update decision.
 
-These are **two sequential logical passes in the MVP**: score relevance, select in code, then classify relationships. Batch each pass's independent questions where the provider permits. Do not combine the passes by default. If selected summaries exceed the request budget, batch without silently truncating evidence; if the global coverage check cannot inspect enough context, escalate or retain the chunk raw. The adapter owns provider request limits and response normalization. Verify the current Jev wire format when implementing; these TypeScript types describe the core contract, not an asserted API payload.
+These are **two sequential logical passes in the MVP**: score relevance, select in code, then classify relationships. Batch each pass's independent questions where the provider permits. Do not combine the passes by default. If selected summaries exceed the request budget, batch without silently truncating evidence; if the global coverage check cannot inspect enough context, escalate or leave the chunk unprocessed. The adapter owns provider request limits and response normalization. Verify the current Jev wire format when implementing; these TypeScript types describe the core contract, not an asserted API payload.
 
 ### Step D: invoke the writer according to execution mode
 
-In active mode, the writer receives the original chunk, affected full sections, catalog, current task, protected records, compaction instructions, and assessment. Shadow mode and bypass audits use an independent writer input as specified below. On uncertain routing it receives all sections if possible; otherwise leave the chunk raw rather than pretend the search was exhaustive.
+In active mode, the writer receives the original chunk, affected full sections, catalog, current task, protected records, compaction instructions, and assessment. Shadow mode and bypass audits use an independent writer input as specified below. On uncertain routing it receives all sections if possible; otherwise leave the chunk unprocessed rather than pretend the search was exhaustive.
 
 It returns a structured patch containing replacement summaries for affected topics, new topics, proposed protected records, and unresolved conflicts. Allow one patch to cover multiple topic changes. Include supporting source references and expected topic versions.
 
@@ -152,9 +154,9 @@ Writer rules:
 
 Code validates the patch schema, source references, allowed topic IDs, expected versions, preservation of explicit pins, and token budget. Assign IDs to new topics in code. Commit the memory update, journal event, and processed-chunk marker atomically.
 
-For no-update decisions, atomically journal the decision and mark the chunk processed. Only after commit can its raw content leave active context. Reprocessing an already committed chunk ID is a no-op.
+For no-update decisions, atomically journal the decision and mark the chunk processed. Only a committed chunk counts as summarized. Reprocessing an already committed chunk ID is a no-op.
 
-Schema and reference checks establish structural validity, not semantic fidelity. Invalid output, timeout, unsupported content, or stale versions leave prior memory and raw context intact. Do not silently advance the processed marker.
+Schema and reference checks establish structural validity, not semantic fidelity. Invalid output, timeout, unsupported content, or stale versions leave prior memory intact and the chunk unprocessed. Do not silently advance the processed marker.
 
 ### Execution modes: full shadow and sampled audits
 
@@ -168,7 +170,7 @@ type ExecutionPolicy = {
 
 **Shadow mode summarizes every chunk.** Run the two Jev passes and record the proposed routing/bypass decision, but always invoke the writer against the same pre-update memory snapshot. The writer's validated patch is authoritative and committed through the usual validation path; classifier decisions do not suppress or restrict the update. “Summarizes everything” means every chunk is assessed for a summary update, not that irrelevant text must be added or every section rewritten. The writer can return an explicit empty patch.
 
-Hide Jev scores, labels, and bypass decisions from the shadow writer to avoid anchoring. Supply the complete chunk, all current topic summaries, task, preservation instructions, and protected records so it can independently discover missed topics. If the full input cannot be inspected within budget, retain/escalate the chunk and label the comparison incomplete; do not count a limited-input result as confirmation. A classifier failure does not block an otherwise valid writer update in shadow mode; log it as unavailable classification. A writer failure follows the usual retain-raw/no-commit behavior.
+Hide Jev scores, labels, and bypass decisions from the shadow writer to avoid anchoring. Supply the complete chunk, all current topic summaries, task, preservation instructions, and protected records so it can independently discover missed topics. If the full input cannot be inspected within budget, retain/escalate the chunk and label the comparison incomplete; do not count a limited-input result as confirmation. A classifier failure does not block an otherwise valid writer update in shadow mode; log it as unavailable classification. A writer failure follows the usual unprocessed/no-commit behavior.
 
 **Active mode with sampled bypass audits** lets Jev control normal routing. Deterministically sample complete would-be no-update decisions using chunk ID, seed, and configured audit rate. Include same-info bypasses and uncovered-content none/transient bypasses, including zero-match chunks. Rate 1 audits every bypass; rate 0 disables audits. Sampling is an additional writer invocation, not a second committed memory branch.
 
@@ -213,20 +215,20 @@ Full shadow evaluates decisions on writer-maintained memory; it does not establi
 
 Start with full shadow enabled. Move to active mode through an explicit configuration change after reviewed traces show acceptable miss risk and useful savings. Lower or disable sampling when the evidence justifies it; a stable observed rate alone is insufficient without adequate sample size and topic coverage. Model, prompt, threshold, or workload changes warrant renewed shadow/audit measurement. There is no automatic promotion or demotion controller in the MVP.
 
-## 6. Context assembly and budget
+## 6. Summary rendering and budget
 
-Render active context in this order:
+Render the summary from committed memory in this order:
 
-1. Current task and explicit compaction instructions.
-2. Active protected records.
-3. Topic summaries, including unresolved conflicts and source IDs.
-4. Recent raw messages and any older chunks that could not be safely compacted.
+1. Active protected records.
+2. Topic summaries, including unresolved conflicts and source IDs.
 
-The host supplies the available memory budget after reserving space for system instructions, tools, recent context, and response tokens. Count the entire rendered output with the target tokenizer where available; use a conservative estimate only as an explicitly measured fallback.
+The summary contains memory only. The current task, compaction instructions, and transcript are model inputs, not rendered output.
 
-Suggested prototype settings: 4,000 tokens for topic summaries, six recent messages extended to preserve call/result boundaries, and a warning at 80% of the summary budget. These are starting parameters, not measured optimums. Protected content and retained failures also count against the host's total budget.
+The host sets two budgets: one for the whole rendered summary and one for its topic section. Count the rendered output with the tokenizer of the model expected to read it where available; use a conservative estimate only as an explicitly measured fallback. Protected records count against the total budget and are never compressed.
 
-When an update would exceed budget, make one LLM compression pass over summaries, preserving protected records and unresolved issues. Validate again. If it still does not fit, return a typed `budget_exceeded` result without applying the proposed compaction; let the host use its existing fallback or request intervention. Never silently evict protected facts. Global compression is exceptional, not the normal per-chunk path.
+Suggested prototype settings: 4,000 tokens for topic summaries and a warning at 80% of that budget. These are starting parameters, not measured optimums.
+
+When an update would exceed budget, make one LLM compression pass over topic summaries, preserving protected records and unresolved issues. Validate again. If it still does not fit, return a typed `budget_exceeded` result without committing; the chunk stays unprocessed and the host can raise the budget or request intervention. Never silently evict protected facts. Global compression is exceptional, not the normal per-chunk path.
 
 Do not create a topic for every incidental observation. The writer creates a section only when the information is relevant to continued work and does not fit an existing section. Stable IDs survive title/description changes. Defer automatic topic merging until actual traces show a need.
 
@@ -248,7 +250,7 @@ interface Store {
 
 // Public surface
 ingest(chunk, taskContext): Promise<IngestResult>
-renderContext(memory, recentRaw, budget): RenderResult
+renderSummary(memory, budget): RenderResult
 ```
 
 Use a single TypeScript package with runtime schema validation. SQLite is a simple storage option for atomic commits and an append-only journal; a transactional store is an implementation detail, not an agent framework. Model adapters need deadlines and usage reporting. Process one chunk at a time so each decision sees the latest topic state.
@@ -299,7 +301,7 @@ Required cases:
 | State-changing action receipt | Exact receipt retained; no rerun implied |
 | Explicit compaction preservation instruction | Protected information survives |
 | Replayed chunk | No duplicated section or update |
-| Malformed response, timeout, or overlong input | Raw chunk retained; no commit |
+| Malformed response, timeout, or overlong input | Chunk left unprocessed; no commit |
 | Failed budget reduction | Typed failure; prior state retained |
 
 Primary routing metric: relevance recall—relevant chunk/topic pairs selected by Step B divided by all labeled relevant pairs. Optimize recall first; report precision, selected topics per chunk, and downstream cost to expose the tradeoff. Include chunks where a relevant correction is a small part of otherwise unrelated content.
@@ -310,7 +312,7 @@ Sweep the relevance and bypass confidence thresholds on the development fixtures
 
 For real traces, report source-supported material disagreement among successfully compared bypasses as a proxy, then adjudicated substantive misses among reviewed bypasses as a separate estimate. Raw patch frequency and wording differences are not error metrics. Report semantic equivalence, required updates, writer regressions, and inconclusive comparisons separately; include comparator overhead in actual cost. Report eligible, sampled, completed, failed, and reviewed counts, sampling probabilities, and uncertainty intervals. Bypass-only sampling estimates error among bypasses; it does not directly yield recall or the fraction of all required updates missed. Those denominators require independently labeled updates across bypassed and non-bypassed chunks. If sampling or review is stratified, weight estimates appropriately and disclose unreviewed cases.
 
-Track preservation of protected content, unnecessary updates, duplicate topics, downstream task success, total model tokens/cost, and latency. In shadow mode report potential writer-call savings separately from actual spend; in active mode include audit overhead in realized savings. Compare full raw context, ordinary LLM summarization, always-LLM topic updates, and classifier-gated topic updates on the same continuation tasks. Include rereads and recovery cost, not just compactor cost.
+Track preservation of protected content, unnecessary updates, duplicate topics, total model tokens/cost, and latency. In shadow mode report potential writer-call savings separately from actual spend; in active mode include audit overhead in realized savings. Compare ordinary whole-transcript LLM summarization, always-LLM topic updates, and classifier-gated topic updates on the same transcripts, judging each summary against its sources.
 
 Initial acceptance: all deterministic failure/idempotency cases pass; no protected-content loss or missed critical update in the hand-inspected fixtures; realistic traces expose enough classifier bypasses to justify the extra assessment call. Passing a small set authorizes experimentation, not a broad reliability claim. Keep a small held-out set separate from prompt tuning.
 
@@ -326,4 +328,4 @@ Existing topic `camera-network`: “Cameras use local RTSP. Internet access is b
 
 ## 10. Core invariant
 
-A chunk leaves active context only after its relevant information is represented in committed memory, explicitly retained verbatim, or classified as already covered/transient under the chosen policy. The raw source remains retrievable. The uncertain cases are the reason the LLM path exists.
+A chunk is marked processed only after its relevant information is represented in committed memory, retained verbatim as a protected record, or classified as already covered/transient under the chosen policy. The raw source remains retrievable from the archive, and the host conversation is never modified. The uncertain cases are the reason the LLM path exists.

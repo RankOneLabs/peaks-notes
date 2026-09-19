@@ -43,7 +43,7 @@ export const TopicSchema = z
   .strict();
 export type Topic = z.infer<typeof TopicSchema>;
 
-/** Spec §4: verbatim information that compaction must preserve. */
+/** Spec §4: verbatim information that the summary must preserve. */
 export const ProtectedRecordSchema = z
   .object({
     id: ProtectedRecordIdSchema,
