@@ -1,0 +1,72 @@
+{
+  "name": "classifier failure in shadow",
+  "description": "Shadow writer commits despite classifier failure.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "LAN only.",
+        "sources": [{ "messageId": "message-old" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-shadow-failure",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-shadow",
+        "role": "user",
+        "content": "Internet is blocked."
+      }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Configure network",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "shadow",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "stubs": {
+    "relevance": [{ "error": "classifier unavailable" }],
+    "assessments": [],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Network",
+              "description": "Network facts",
+              "summary": "LAN only; internet blocked.",
+              "sources": [{ "messageId": "message-shadow" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 2 }
+}
