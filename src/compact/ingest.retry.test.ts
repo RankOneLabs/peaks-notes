@@ -171,11 +171,11 @@ test("a retained shadow attempt can retry with distinct SQLite journal identitie
   expect(writer.proposeCalls).toHaveLength(2);
   expect(attempt).toBe(2);
   const ids = journalIdsForChunk(path);
-  expect(ids).toHaveLength(4);
+  expect(ids).toHaveLength(6);
   expect(new Set(ids).size).toBe(ids.length);
-  expect(ids.filter((id) => id.includes("attempt-1"))).toHaveLength(2);
-  expect(ids.filter((id) => id.includes("attempt-2"))).toHaveLength(1);
-  expect(ids).toContain("journal-chunk-retry-commit");
+  expect(ids.filter((id) => id.includes("attempt-1"))).toHaveLength(3);
+  expect(ids.filter((id) => id.includes("attempt-2"))).toHaveLength(3);
+  expect(ids).toContain("journal-chunk-retry-attempt-2-commit");
   store.close();
 });
 
@@ -233,7 +233,7 @@ test("an active audited bypass retries after commit failure without journal coll
   expect(writer.proposeCalls).toHaveLength(2);
   expect(evaluator.calls).toHaveLength(2);
   const ids = journalIdsForChunk(path);
-  expect(ids).toHaveLength(5);
+  expect(ids).toHaveLength(7);
   expect(new Set(ids).size).toBe(ids.length);
   sqlite.close();
 });

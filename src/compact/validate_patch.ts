@@ -85,3 +85,56 @@ export const validatePatch = (
   }
   return ok(patch);
 };
+
+/** Compression may replace candidate topics only and must retain unresolved work. */
+export const validateCompressionPatch = (
+  memory: Memory,
+  input: unknown,
+): Result<MemoryPatch, CompactEscalation> => {
+  const parsed = MemoryPatchSchema.safeParse(input);
+  if (!parsed.success)
+    return failure(
+      parsed.error.issues.map(({ message }) => message).join("; "),
+    );
+  const patch = parsed.data;
+  if (
+    patch.newTopics.length > 0 ||
+    patch.addProtected.length > 0 ||
+    patch.supersedeProtected.length > 0
+  )
+    return failure("compression may replace candidate topics only");
+  const topics = new Map(memory.topics.map((topic) => [topic.id, topic]));
+  const allowedSources = new Set([
+    ...memory.topics.flatMap(({ sources }) =>
+      sources.map(({ messageId }) => messageId),
+    ),
+    ...memory.protected.flatMap(({ sources }) =>
+      sources.map(({ messageId }) => messageId),
+    ),
+  ]);
+  const seen = new Set<string>();
+  for (const replacement of patch.replacements) {
+    const current = topics.get(replacement.topicId);
+    if (current === undefined)
+      return failure(`unknown compression topic: ${replacement.topicId}`);
+    if (seen.has(replacement.topicId))
+      return failure(`duplicate replacement topic: ${replacement.topicId}`);
+    if (replacement.expectedVersion !== current.version)
+      return failure(`stale topic version: ${replacement.topicId}`);
+    seen.add(replacement.topicId);
+    const unresolved = new Set(replacement.unresolved);
+    if (current.unresolved.some((item) => !unresolved.has(item)))
+      return failure(
+        `compression omitted unresolved issue: ${replacement.topicId}`,
+      );
+    if (
+      replacement.sources.some(
+        ({ messageId }) => !allowedSources.has(messageId),
+      )
+    )
+      return failure(
+        `compression introduced unknown source: ${replacement.topicId}`,
+      );
+  }
+  return ok(patch);
+};

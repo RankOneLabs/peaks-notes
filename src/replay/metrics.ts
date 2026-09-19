@@ -16,6 +16,9 @@ export type RoleMetrics = {
   totalTokens: number;
   latencyMs: number;
   costUsd: number;
+  reportedUsageCalls?: number;
+  estimatedUsageCalls?: number;
+  unknownUsageCalls?: number;
 };
 
 export type MetricsReport = {
@@ -34,6 +37,21 @@ export type MetricsReport = {
     rate: number | null;
     amongBypassesRate: number | null;
     byGate: GateMissCounts;
+  };
+  classifierPolicy?: {
+    eligibleLabeled: number;
+    evaluatedLabeled: number;
+    predictedBypasses: number;
+    requiredUpdatesPredictedBypass: number;
+    criticalMisses: number;
+    unavailable: number;
+  };
+  authoritative?: {
+    activeBypasses: number;
+    writerReviewedNoUpdates: number;
+    committedUpdates: number;
+    retainedFailures: number;
+    budgetFailures: number;
   };
   newVersusChanging: {
     expectedNewPredictedChanging: number;
@@ -57,7 +75,11 @@ export type MetricsReport = {
     failed: number;
     samplingProbability: number | null;
   };
-  model: { classifier: RoleMetrics; writer: RoleMetrics; evaluator: RoleMetrics };
+  model: {
+    classifier: RoleMetrics;
+    writer: RoleMetrics;
+    evaluator: RoleMetrics;
+  };
   savings: {
     potentialWriterCallsShadow: number;
     realizedWriterCallsActive: number;
@@ -79,9 +101,17 @@ const emptyRole = (): RoleMetrics => ({
   totalTokens: 0,
   latencyMs: 0,
   costUsd: 0,
+  reportedUsageCalls: 0,
+  estimatedUsageCalls: 0,
+  unknownUsageCalls: 0,
 });
 
-const addUsage = (target: RoleMetrics, usage: Usage, latencyMs: number, jev = false): void => {
+const addUsage = (
+  target: RoleMetrics,
+  usage: Usage,
+  latencyMs: number,
+  jev = false,
+): void => {
   target.calls += 1;
   target.inputTokens += usage.inputTokens;
   target.outputTokens += usage.outputTokens;
@@ -102,11 +132,24 @@ export type ComputeMetricsInput = {
 };
 
 /** Pure evaluation transform: no adapters, clock, filesystem, or database. */
-export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput): MetricsReport => {
+export const computeMetrics = ({
+  entries,
+  labels,
+  policy,
+}: ComputeMetricsInput): MetricsReport => {
   const labelsByChunk = new Map(labels.map((label) => [label.chunkId, label]));
-  const decisions = new Map<string, Extract<JournalEntry, { type: "committed_update" | "no_update" }>>();
+  const decisions = new Map<
+    string,
+    Extract<JournalEntry, { type: "committed_update" | "no_update" }>
+  >();
+  const routes = new Map<
+    string,
+    Extract<JournalEntry, { type: "routing_decision" }>
+  >();
   for (const entry of entries) {
-    if (entry.type === "committed_update" || entry.type === "no_update") decisions.set(entry.chunkId, entry);
+    if (entry.type === "committed_update" || entry.type === "no_update")
+      decisions.set(entry.chunkId, entry);
+    if (entry.type === "routing_decision") routes.set(entry.chunkId, entry);
   }
 
   let truePositive = 0;
@@ -116,41 +159,66 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
   let falseNoUpdateCount = 0;
   let requiredUpdateCount = 0;
   let bypassCount = 0;
-  const byGate: GateMissCounts = { relevance: 0, sameInfo: 0, uncoveredContent: 0 };
+  const byGate: GateMissCounts = {
+    relevance: 0,
+    sameInfo: 0,
+    uncoveredContent: 0,
+  };
   let expectedNewPredictedChanging = 0;
   let expectedChangingPredictedNew = 0;
   let protectedContentLosses = 0;
   let missedCriticalUpdates = 0;
+  let evaluatedLabeled = 0;
+  let predictedBypasses = 0;
+  let unavailable = 0;
 
   for (const label of labels) {
     const decision = decisions.get(label.chunkId);
+    const route = routes.get(label.chunkId);
+    const effectiveBypass =
+      route === undefined
+        ? decision?.type === "no_update"
+        : route.route === "bypass" && !route.protectionOverride;
     if (label.requiresUpdate) requiredUpdateCount += 1;
-    if (decision?.type === "no_update") bypassCount += 1;
-    if (decision?.type === "no_update" && label.requiresUpdate) {
+    if (route?.route === "unavailable") unavailable += 1;
+    else if (route !== undefined && route.effectiveMode !== "baseline")
+      evaluatedLabeled += 1;
+    if (effectiveBypass) {
+      bypassCount += 1;
+      predictedBypasses += 1;
+    }
+    if (effectiveBypass && label.requiresUpdate) {
       falseNoUpdateCount += 1;
       if (label.criticalUpdate) missedCriticalUpdates += 1;
       if (label.protectedContent.length > 0) protectedContentLosses += 1;
       if (label.expectedNoUpdateGate === "relevance") byGate.relevance += 1;
       if (label.expectedNoUpdateGate === "same_info") byGate.sameInfo += 1;
-      if (label.expectedNoUpdateGate === "uncovered_content") byGate.uncoveredContent += 1;
+      if (label.expectedNoUpdateGate === "uncovered_content")
+        byGate.uncoveredContent += 1;
     }
-    const relevance = decision?.classifier?.relevance;
+    const relevance = route?.relevance ?? decision?.classifier?.relevance;
     if (relevance !== undefined) {
       const relevant = new Set(label.relevantTopicIds);
       for (const score of relevance.topics) {
-        const selected = score.score >= policy.relevanceThreshold;
+        const selected =
+          score.score >=
+          (route?.classifierPolicy.relevanceThreshold ??
+            policy.relevanceThreshold);
         if (selected) selectedTopics += 1;
         if (selected && relevant.has(score.topicId)) truePositive += 1;
         else if (selected) falsePositive += 1;
         else if (relevant.has(score.topicId)) falseNegative += 1;
       }
       for (const topicId of relevant) {
-        if (!relevance.topics.some((score) => score.topicId === topicId)) falseNegative += 1;
+        if (!relevance.topics.some((score) => score.topicId === topicId))
+          falseNegative += 1;
       }
     } else {
       falseNegative += label.relevantTopicIds.length;
     }
-    for (const relation of decision?.classifier?.assessment?.relations ?? []) {
+    for (const relation of route?.assessment?.relations ??
+      decision?.classifier?.assessment?.relations ??
+      []) {
       const expected = label.expectedRelationships[relation.topicId];
       if (expected === "new_info" && relation.relationship === "changing_info")
         expectedNewPredictedChanging += 1;
@@ -176,15 +244,37 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
   let potentialWriterCallsShadow = 0;
   let activeBypasses = 0;
   let auditOverheadCalls = 0;
+  let committedUpdates = 0;
+  let writerReviewedNoUpdates = 0;
+  let budgetFailures = 0;
+  let retainedFailures = 0;
+  const hasCanonicalCalls = entries.some(
+    (entry) => entry.type === "model_call",
+  );
 
   for (const entry of entries) {
     if (entry.type === "committed_update") {
-      addUsage(writer, entry.writerUsage, entry.writerLatencyMs);
-      if (entry.classifier?.usage !== undefined)
-        addUsage(classifier, entry.classifier.usage, entry.classifier.latencyMs ?? 0, true);
+      committedUpdates += 1;
+      if (!hasCanonicalCalls)
+        addUsage(writer, entry.writerUsage, entry.writerLatencyMs);
+      if (!hasCanonicalCalls && entry.classifier?.usage !== undefined)
+        addUsage(
+          classifier,
+          entry.classifier.usage,
+          entry.classifier.latencyMs ?? 0,
+          true,
+        );
     } else if (entry.type === "no_update") {
-      if (entry.classifier.usage !== undefined)
-        addUsage(classifier, entry.classifier.usage, entry.classifier.latencyMs ?? 0, true);
+      const route = routes.get(entry.chunkId);
+      if (route?.route !== "bypass" || route.protectionOverride)
+        writerReviewedNoUpdates += 1;
+      if (!hasCanonicalCalls && entry.classifier.usage !== undefined)
+        addUsage(
+          classifier,
+          entry.classifier.usage,
+          entry.classifier.latencyMs ?? 0,
+          true,
+        );
     } else if (entry.type === "audit_record" && entry.proposedBypass) {
       eligible += 1;
       probabilityTotal += entry.policy.bypassAuditRate;
@@ -193,19 +283,29 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
       if (entry.sampled) {
         sampled += 1;
         auditOverheadCalls += 1;
-        if (entry.outcome === "failed" || entry.outcome === "timed_out") failed += 1;
+        if (entry.outcome === "failed" || entry.outcome === "timed_out")
+          failed += 1;
         else completed += 1;
       }
-      if (entry.writerUsage !== undefined)
+      if (!hasCanonicalCalls && entry.writerUsage !== undefined)
         addUsage(writer, entry.writerUsage, entry.writerLatencyMs ?? 0);
     } else if (entry.type === "semantic_comparison") {
-      addUsage(evaluator, entry.evaluatorUsage, entry.evaluatorLatencyMs);
+      if (!hasCanonicalCalls)
+        addUsage(evaluator, entry.evaluatorUsage, entry.evaluatorLatencyMs);
       if (entry.comparison.verdict === "equivalent") equivalent += 1;
       else if (entry.comparison.verdict === "material_change") material += 1;
       else inconclusive += 1;
-      if (entry.comparison.changes.some((change) => change.assessment === "required_update"))
+      if (
+        entry.comparison.changes.some(
+          (change) => change.assessment === "required_update",
+        )
+      )
         requiredUpdate += 1;
-      if (entry.comparison.changes.some((change) => change.assessment === "writer_regression"))
+      if (
+        entry.comparison.changes.some(
+          (change) => change.assessment === "writer_regression",
+        )
+      )
         writerRegression += 1;
       const label = labelsByChunk.get(entry.chunkId);
       if (label?.humanSpotCheck && entry.comparison.verdict !== "uncertain") {
@@ -217,6 +317,33 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
       }
     } else if (entry.type === "semantic_comparison_failure") {
       inconclusive += 1;
+    } else if (entry.type === "gate_decision") {
+      retainedFailures += 1;
+      if (entry.gate === "budget") budgetFailures += 1;
+    } else if (entry.type === "model_call") {
+      const target =
+        entry.role === "classifier"
+          ? classifier
+          : entry.role === "writer"
+            ? writer
+            : evaluator;
+      if (entry.usage === undefined) {
+        target.calls += 1;
+        target.latencyMs += entry.latencyMs;
+        target.unknownUsageCalls = (target.unknownUsageCalls ?? 0) + 1;
+      } else {
+        addUsage(
+          target,
+          entry.usage,
+          entry.latencyMs,
+          entry.role === "classifier",
+        );
+        if (entry.usageProvenance === "reported")
+          target.reportedUsageCalls = (target.reportedUsageCalls ?? 0) + 1;
+        else if (entry.usageProvenance === "estimated")
+          target.estimatedUsageCalls = (target.estimatedUsageCalls ?? 0) + 1;
+        else target.unknownUsageCalls = (target.unknownUsageCalls ?? 0) + 1;
+      }
     }
   }
   const agreementDenominator = equivalent + material;
@@ -230,7 +357,8 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
       recall: ratio(truePositive, truePositive + falseNegative),
       precision: ratio(truePositive, truePositive + falsePositive),
     },
-    selectedTopicsPerChunk: labels.length === 0 ? 0 : selectedTopics / labels.length,
+    selectedTopicsPerChunk:
+      labels.length === 0 ? 0 : selectedTopics / labels.length,
     falseNoUpdates: {
       count: falseNoUpdateCount,
       requiredUpdateCount,
@@ -238,7 +366,25 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
       amongBypassesRate: ratio(falseNoUpdateCount, bypassCount),
       byGate,
     },
-    newVersusChanging: { expectedNewPredictedChanging, expectedChangingPredictedNew },
+    classifierPolicy: {
+      eligibleLabeled: labels.length,
+      evaluatedLabeled,
+      predictedBypasses,
+      requiredUpdatesPredictedBypass: falseNoUpdateCount,
+      criticalMisses: missedCriticalUpdates,
+      unavailable,
+    },
+    authoritative: {
+      activeBypasses,
+      writerReviewedNoUpdates,
+      committedUpdates,
+      retainedFailures,
+      budgetFailures,
+    },
+    newVersusChanging: {
+      expectedNewPredictedChanging,
+      expectedChangingPredictedNew,
+    },
     semantic: {
       equivalent,
       material,
@@ -260,7 +406,10 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
     model: { classifier, writer, evaluator },
     savings: {
       potentialWriterCallsShadow,
-      realizedWriterCallsActive: Math.max(0, activeBypasses - auditOverheadCalls),
+      realizedWriterCallsActive: Math.max(
+        0,
+        activeBypasses - auditOverheadCalls,
+      ),
       auditOverheadCalls,
     },
     protectedContentLosses,

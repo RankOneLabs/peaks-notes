@@ -44,7 +44,10 @@ test("replay validates every populated fixture expectation", async () => {
         ...loaded,
         fixture: {
           ...loaded.fixture,
-          expected: { ...loaded.fixture.expected, reasonIncludes: "missing reason" },
+          expected: {
+            ...loaded.fixture.expected,
+            reasonIncludes: "missing reason",
+          },
         },
       },
       replay,
@@ -64,11 +67,27 @@ test("replay validates every populated fixture expectation", async () => {
   ).toThrow("expected audit outcome=failed");
 });
 
+test("a shadow writer rescue remains a classifier-policy miss", async () => {
+  const result = await runReplay({
+    fixtures: "fixtures/semantic",
+    adapters: "stub",
+  });
+  expect(
+    result.metrics.classifierPolicy?.requiredUpdatesPredictedBypass,
+  ).toBeGreaterThanOrEqual(1);
+  expect(
+    result.metrics.classifierPolicy?.criticalMisses,
+  ).toBeGreaterThanOrEqual(1);
+  expect(result.metrics.authoritative?.committedUpdates).toBeGreaterThan(0);
+});
+
 test("fixture loading rejects manifest entries missing from the directory", async () => {
   const directory = await mkdtemp(join(tmpdir(), "peaks-missing-fixture-"));
   const manifestPath = join(directory, "manifest.json");
   try {
-    const manifest = JSON.parse(await readFile("fixtures/manifest.json", "utf8"));
+    const manifest = JSON.parse(
+      await readFile("fixtures/manifest.json", "utf8"),
+    );
     manifest.dev.fixtures.push({
       file: "fixtures/deterministic/missing-declared.json",
       chunkId: "chunk-missing-declared",
@@ -88,9 +107,9 @@ test("CLI flags reject missing values", () => {
   expect(() => valueAfter(["--adapters"], "--adapters")).toThrow(
     "--adapters requires a value",
   );
-  expect(() => valueAfter(["--adapters", "--mode", "active"], "--adapters")).toThrow(
-    "--adapters requires a value",
-  );
+  expect(() =>
+    valueAfter(["--adapters", "--mode", "active"], "--adapters"),
+  ).toThrow("--adapters requires a value");
 });
 
 test("recorded audit assignments override resampling", async () => {

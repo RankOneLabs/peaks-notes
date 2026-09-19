@@ -5,7 +5,7 @@ import { StubClassifier } from "../classifier/stub";
 import { ingest } from "../compact/ingest";
 import { loadConfig } from "../config";
 import { StubEvaluator } from "../evaluator/stub";
-import { renderContext } from "../render/render";
+import { ConservativeTokenizer } from "../render/estimate_tokens";
 import type {
   Chunk,
   ClassifierPolicy,
@@ -23,9 +23,9 @@ import { ClassifierPolicySchema, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
 import { StubWriter } from "../writer/stub";
 import {
+  type LoadedFixture,
   loadArchivedJournal,
   loadFixtures,
-  type LoadedFixture,
 } from "./load_fixtures";
 import { computeMetrics, type MetricsReport } from "./metrics";
 
@@ -81,12 +81,15 @@ class ReplayStore implements Store {
     if (this.memory.processedChunkIds.includes(change.chunkId))
       return ok({ status: "replayed", revision: this.memory.revision });
     this.journal.push(structuredClone(change.journalEntry));
-    if (change.type === "committed_update") this.memory = structuredClone(change.memory);
+    if (change.type === "committed_update")
+      this.memory = structuredClone(change.memory);
     else this.memory.processedChunkIds.push(change.chunkId);
     return ok({ status: "committed", revision: this.memory.revision });
   }
 
-  async appendJournal(entry: EvaluationJournalEntry): Promise<Result<void, DomainError>> {
+  async appendJournal(
+    entry: EvaluationJournalEntry,
+  ): Promise<Result<void, DomainError>> {
     this.journal.push(structuredClone(entry));
     return ok(undefined);
   }
@@ -104,7 +107,9 @@ const defaultPolicy: ClassifierPolicy = {
   uncoveredNoChangeMinConfidence: 0.8,
 };
 
-const auditAssignments = (entries: readonly JournalEntry[]): Record<string, boolean> => {
+const auditAssignments = (
+  entries: readonly JournalEntry[],
+): Record<string, boolean> => {
   const assignments: Record<string, boolean> = {};
   for (const entry of entries) {
     if (entry.type === "audit_record" && entry.proposedBypass)
@@ -115,11 +120,12 @@ const auditAssignments = (entries: readonly JournalEntry[]): Record<string, bool
 
 export const reuseRecordedAuditAssignments = (
   entries: readonly JournalEntry[],
-): ReadonlyMap<string, boolean> => new Map(Object.entries(auditAssignments(entries)));
+): ReadonlyMap<string, boolean> =>
+  new Map(Object.entries(auditAssignments(entries)));
 
 const ActiveSweepRecordSchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     split: z.literal("dev"),
     chosenPolicy: ClassifierPolicySchema,
   })
@@ -145,7 +151,8 @@ const runFixture = async (
   const { fixture } = loaded;
   const store = new ReplayStore(fixture.initialMemory);
   const adapterMode = options.adapters ?? "stub";
-  const live = adapterMode === "live" ? createConfiguredAdapters(loadConfig()) : undefined;
+  const live =
+    adapterMode === "live" ? createConfiguredAdapters(loadConfig()) : undefined;
   // Until a standalone trace schema exists, `recorded` intentionally consumes
   // the fixture's checked-in queues through the deterministic adapters. It is
   // an explicit offline alias, not a live-provider configuration.
@@ -161,31 +168,12 @@ const runFixture = async (
       proposals: fixture.stubs.proposals,
       compressions: fixture.stubs.compressions,
     });
-  const evaluator = live?.evaluator ?? new StubEvaluator(fixture.stubs.comparisons);
+  const evaluator =
+    live?.evaluator ?? new StubEvaluator(fixture.stubs.comparisons);
 
-  if (fixture.expected.status === "budget_exceeded") {
-    const rendered = await renderContext(
-      fixture.initialMemory,
-      fixture.chunk.messages,
-      { maxTokens: 1, warningThreshold: 0.8 },
-      { writer, taskContext: fixture.taskContext },
-    );
-    if (rendered.status !== "budget_exceeded")
-      throw new Error(`${loaded.path}: expected render budget to be exceeded`);
-    return {
-      file: loaded.path,
-      result: {
-        status: "budget_exceeded",
-        chunkId: fixture.chunk.id,
-        budget: rendered.budget,
-        required: rendered.required,
-      },
-      revision: store.memory.revision,
-      journal: [],
-    };
-  }
-
-  const recordedAssignment = options.recordedAuditAssignments?.get(fixture.chunk.id);
+  const recordedAssignment = options.recordedAuditAssignments?.get(
+    fixture.chunk.id,
+  );
   const requestedPolicy = {
     ...fixture.executionPolicy,
     ...(options.mode === undefined || options.mode === "baseline"
@@ -203,6 +191,15 @@ const runFixture = async (
     evaluator,
     classifierPolicy: options.policy ?? fixture.classifierPolicy,
     executionPolicy,
+    budget: {
+      maxTokens: fixture.budget?.maxTokens ?? 100_000,
+      summaryBudgetTokens: fixture.budget?.summaryBudgetTokens ?? 4_000,
+      tokenizer: new ConservativeTokenizer(),
+      rawMessages: [],
+      ...(fixture.budget?.recentMessageCount === undefined
+        ? {}
+        : { recentMessageCount: fixture.budget.recentMessageCount }),
+    },
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(fixture.auditDeadlineMs === undefined
       ? {}
@@ -262,7 +259,8 @@ export const assertExpected = (
       `${loaded.path}: expected audit sampled=${loaded.fixture.expected.auditSampled}, received ${replay.auditSampled}`,
     );
   const audit = replay.journal.find((entry) => entry.type === "audit_record");
-  const auditOutcome = audit?.type === "audit_record" ? audit.outcome : undefined;
+  const auditOutcome =
+    audit?.type === "audit_record" ? audit.outcome : undefined;
   if (
     loaded.fixture.expected.auditOutcome !== undefined &&
     auditOutcome !== loaded.fixture.expected.auditOutcome
@@ -272,15 +270,22 @@ export const assertExpected = (
     );
 };
 
-export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> => {
+export const runReplay = async (
+  options: ReplayOptions,
+): Promise<ReplayResult> => {
   if ((options.fixtures === undefined) === (options.journal === undefined))
     throw new Error("provide exactly one of fixtures or journal");
-  const sweepRecordPath = options.sweepRecordPath ?? "fixtures/sweep-record.json";
+  const sweepRecordPath =
+    options.sweepRecordPath ?? "fixtures/sweep-record.json";
   const recordedPolicy =
-    options.mode === "active" ? await loadActivePolicy(sweepRecordPath) : undefined;
+    options.mode === "active"
+      ? await loadActivePolicy(sweepRecordPath)
+      : undefined;
   const selectedPolicy = options.policy ?? recordedPolicy;
   const effectiveOptions =
-    selectedPolicy === undefined ? options : { ...options, policy: selectedPolicy };
+    selectedPolicy === undefined
+      ? options
+      : { ...options, policy: selectedPolicy };
 
   if (options.journal !== undefined) {
     const archive = await loadArchivedJournal(options.journal);
@@ -290,11 +295,18 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
       fixtures: [],
       journal: archive.entries,
       auditAssignments: auditAssignments(archive.entries),
-      metrics: computeMetrics({ entries: archive.entries, labels: archive.labels, policy }),
+      metrics: computeMetrics({
+        entries: archive.entries,
+        labels: archive.labels,
+        policy,
+      }),
     };
   }
 
-  const loaded = await loadFixtures(options.fixtures as string, options.manifestPath);
+  const loaded = await loadFixtures(
+    options.fixtures as string,
+    options.manifestPath,
+  );
   const fixtures: FixtureReplayResult[] = [];
   for (const item of loaded) {
     const replay = await runFixture(item, effectiveOptions);
@@ -316,7 +328,8 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
     metrics: computeMetrics({
       entries: journal,
       labels: loaded.map(({ label }) => label),
-      policy: selectedPolicy ?? loaded[0]?.fixture.classifierPolicy ?? defaultPolicy,
+      policy:
+        selectedPolicy ?? loaded[0]?.fixture.classifierPolicy ?? defaultPolicy,
     }),
   };
 };

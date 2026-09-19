@@ -1,1 +1,87 @@
-{"name":"preference correction","description":"An explicit preference correction updates the current topic.","initialMemory":{"revision":1,"topics":[{"id":"topic-1","title":"Preference","description":"User preference","version":1,"summary":"Use blue.","sources":[{"messageId":"old-1"}],"unresolved":[]}],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-preference-correction","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-preference","role":"user","content":"Correction: use green, not blue."}]},"taskContext":{"currentTask":"Choose color","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"active","bypassAuditRate":0,"auditSeed":"semantic"},"stubs":{"relevance":[{"output":{"topics":[{"topicId":"topic-1","score":0.99}]}}],"assessments":[{"output":{"relations":[{"topicId":"topic-1","relationship":"changing_info","confidence":0.99}],"uncovered":{"outcome":"none","confidence":0.99}}}],"proposals":[{"output":{"replacements":[{"topicId":"topic-1","expectedVersion":1,"title":"Preference","description":"User preference","summary":"Use green.","sources":[{"messageId":"message-preference"}],"unresolved":[]}],"newTopics":[],"addProtected":[],"supersedeProtected":[]}}],"compressions":[],"comparisons":[]},"expected":{"status":"committed","revision":2}}
+{
+  "name": "preference correction",
+  "description": "An explicit preference correction updates the current topic.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Preference",
+        "description": "User preference",
+        "version": 1,
+        "summary": "Use blue.",
+        "sources": [{ "messageId": "old-1" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-preference-correction",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-preference",
+        "role": "user",
+        "content": "Correction: use green, not blue."
+      }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Choose color",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 0,
+    "auditSeed": "semantic"
+  },
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.99 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-1",
+              "relationship": "changing_info",
+              "confidence": 0.99
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.99 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Preference",
+              "description": "User preference",
+              "summary": "Use green.",
+              "sources": [{ "messageId": "message-preference" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 2 }
+}

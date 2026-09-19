@@ -1,5 +1,6 @@
 export * from "./chunk";
 export * from "./classifier";
+export * from "./contracts";
 export * from "./errors";
 export * from "./evaluation";
 export * from "./ids";

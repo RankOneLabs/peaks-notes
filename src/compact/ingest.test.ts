@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { StubClassifier } from "../classifier/stub";
 import { LlmEvaluator } from "../evaluator/llm_evaluator";
 import { StubEvaluator } from "../evaluator/stub";
-import { renderContext } from "../render/render";
+import { ConservativeTokenizer } from "../render/estimate_tokens";
 import { DeterministicFixtureSchema } from "../replay/fixture";
 import type {
   Classifier,
@@ -108,16 +108,6 @@ describe("deterministic fixtures", () => {
         proposals: fixture.stubs.proposals,
         compressions: fixture.stubs.compressions,
       });
-      if (fixture.expected.status === "budget_exceeded") {
-        const result = await renderContext(
-          fixture.initialMemory,
-          fixture.chunk.messages,
-          { maxTokens: 1, warningThreshold: 0.8 },
-          { writer, taskContext: fixture.taskContext },
-        );
-        expect(result.status).toBe("budget_exceeded");
-        return;
-      }
       const store = new MemoryStore(fixture.initialMemory);
       const result = await ingest(fixture.chunk, fixture.taskContext, {
         store,
@@ -129,6 +119,12 @@ describe("deterministic fixtures", () => {
         evaluator: new StubEvaluator(fixture.stubs.comparisons),
         classifierPolicy: fixture.classifierPolicy,
         executionPolicy: fixture.executionPolicy,
+        budget: {
+          maxTokens: fixture.budget?.maxTokens ?? 100_000,
+          summaryBudgetTokens: fixture.budget?.summaryBudgetTokens ?? 4_000,
+          tokenizer: new ConservativeTokenizer(),
+          rawMessages: [],
+        },
         ...(fixture.auditDeadlineMs === undefined
           ? {}
           : { auditDeadlineMs: fixture.auditDeadlineMs }),
@@ -272,7 +268,7 @@ test("unchanged live evaluation is journaled with the live model identity", asyn
       evaluatorModel: {
         provider: "recorded",
         model: "live-evaluator-model",
-        promptVersion: "evaluator-v1",
+        promptVersion: "evaluator-v2",
       },
     }),
   );
@@ -437,7 +433,9 @@ test("shadow commits a writer patch despite a confident same-info decision", asy
   expect(result.status).toBe("committed");
   expect(store.memory.topics[0]?.summary).toBe("LAN only, confirmed.");
   expect(writer.proposeCalls[0]?.assessment).toBeUndefined();
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "audit_record"),
+  ).toMatchObject({
     type: "audit_record",
     proposedBypass: true,
     sampled: false,
@@ -553,7 +551,9 @@ test("active full-rate audit journals but never applies its patch", async () => 
   });
   expect(result).toMatchObject({ status: "no_update", revision: 1 });
   expect(store.memory.topics[0]?.summary).toBe("LAN only.");
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "audit_record"),
+  ).toMatchObject({
     type: "audit_record",
     outcome: "patch",
   });
@@ -882,7 +882,9 @@ test("synchronous audit writer throws are recorded and do not block bypass", asy
     executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
   });
   expect(result.status).toBe("no_update");
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "audit_record"),
+  ).toMatchObject({
     type: "audit_record",
     outcome: "failed",
   });
@@ -908,7 +910,9 @@ test("malformed writer output reaches the patch gate without dereferencing", asy
     executionPolicy: fixture.executionPolicy,
   });
   expect(result.status).toBe("retained");
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "gate_decision"),
+  ).toMatchObject({
     type: "gate_decision",
     gate: "patch",
   });
@@ -952,7 +956,9 @@ test("writer records cannot replace deterministic protections", async () => {
   });
   expect(result.status).toBe("retained");
   expect(store.memory.protected).toHaveLength(0);
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "gate_decision"),
+  ).toMatchObject({
     type: "gate_decision",
     gate: "patch",
     reason: expect.stringContaining("collides"),
@@ -1050,7 +1056,7 @@ test("journal persistence failures prevent shadow commits", async () => {
   });
   expect(result).toMatchObject({
     status: "retained",
-    reason: expect.stringContaining("shadow routing journal failed"),
+    reason: expect.stringContaining("routing journal failed"),
   });
   expect(store.commits).toHaveLength(0);
 });
@@ -1085,7 +1091,9 @@ test("conflicting active and shadow inputs are rejected", async () => {
     mode: "active",
   });
   expect(result.status).toBe("retained");
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "gate_decision"),
+  ).toMatchObject({
     type: "gate_decision",
     gate: "configuration",
     effectiveMode: "active",
@@ -1106,7 +1114,9 @@ test("baseline gate journals record baseline as the effective mode", async () =>
     mode: "baseline",
   });
   expect(result.status).toBe("retained");
-  expect(store.journal[0]).toMatchObject({
+  expect(
+    store.journal.find(({ type }) => type === "gate_decision"),
+  ).toMatchObject({
     type: "gate_decision",
     gate: "writer",
     effectiveMode: "baseline",

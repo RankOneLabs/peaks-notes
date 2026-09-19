@@ -28,7 +28,7 @@ test("semantically unchanged snapshots skip the evaluator provider", async () =>
     apiKey: "unused",
     model: "recorded",
     deadlineMs: 100,
-    promptVersion: "evaluator-v1",
+    promptVersion: "evaluator-v2",
     maxInputTokens: 32_000,
   });
   const before = {
@@ -54,7 +54,7 @@ test("semantically unchanged snapshots skip the evaluator provider", async () =>
   expect(evaluator.getLastCall()).toMatchObject({
     provider: "recorded",
     model: "recorded",
-    promptVersion: "evaluator-v1",
+    promptVersion: "evaluator-v2",
     usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
   });
 });

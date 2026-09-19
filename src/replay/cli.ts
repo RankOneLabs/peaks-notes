@@ -1,10 +1,13 @@
 import { writeFile } from "node:fs/promises";
-import type { ReplayAdapterMode } from "./run";
 import { formatReport } from "./report";
+import type { ReplayAdapterMode } from "./run";
 import { runReplay } from "./run";
 import { runSweep } from "./sweep";
 
-export const valueAfter = (args: string[], flag: string): string | undefined => {
+export const valueAfter = (
+  args: string[],
+  flag: string,
+): string | undefined => {
   const index = args.indexOf(flag);
   if (index === -1) return undefined;
   const value = args[index + 1];
@@ -15,7 +18,8 @@ export const valueAfter = (args: string[], flag: string): string | undefined => 
 
 const adapterMode = (value: string | undefined): ReplayAdapterMode => {
   if (value === undefined) return "stub";
-  if (value === "stub" || value === "recorded" || value === "live") return value;
+  if (value === "stub" || value === "recorded" || value === "live")
+    return value;
   throw new Error(`unknown adapter mode: ${value}`);
 };
 
@@ -26,9 +30,11 @@ const main = async (): Promise<void> => {
   const fixtures = valueAfter(commandArgs, "--fixtures");
   const adapters = adapterMode(valueAfter(commandArgs, "--adapters"));
   const manifestPath = valueAfter(commandArgs, "--manifest");
-  const recordPath = valueAfter(commandArgs, "--policy-record") ?? "fixtures/sweep-record.json";
+  const recordPath =
+    valueAfter(commandArgs, "--policy-record") ?? "fixtures/sweep-record.json";
   if (command === "sweep") {
-    if (fixtures === undefined) throw new Error("sweep requires --fixtures <dev-directory>");
+    if (fixtures === undefined)
+      throw new Error("sweep requires --fixtures <dev-directory>");
     const result = await runSweep({
       fixtures,
       adapters,
@@ -59,7 +65,11 @@ const main = async (): Promise<void> => {
   const report = formatReport(result.metrics);
   const output = valueAfter(commandArgs, "--report");
   if (output !== undefined)
-    await writeFile(output, `${JSON.stringify(result.metrics, null, 2)}\n`, "utf8");
+    await writeFile(
+      output,
+      `${JSON.stringify(result.metrics, null, 2)}\n`,
+      "utf8",
+    );
   console.log(report);
 };
 

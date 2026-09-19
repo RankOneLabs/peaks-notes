@@ -57,7 +57,10 @@ export const FixtureLabelSchema = z
 export type FixtureLabel = z.infer<typeof FixtureLabelSchema>;
 
 const SplitSchema = z
-  .object({ directories: z.array(z.string().min(1)).min(1), fixtures: z.array(FixtureLabelSchema) })
+  .object({
+    directories: z.array(z.string().min(1)).min(1),
+    fixtures: z.array(FixtureLabelSchema),
+  })
   .strict();
 
 export const FixtureManifestSchema = z
@@ -72,7 +75,10 @@ export const FixtureManifestSchema = z
     const declared = new Set(manifest.requiredCases);
     for (const required of REQUIRED_CASES) {
       if (!declared.has(required)) {
-        context.addIssue({ code: "custom", message: `missing required case: ${required}` });
+        context.addIssue({
+          code: "custom",
+          message: `missing required case: ${required}`,
+        });
       }
     }
     const labeled = new Set(
@@ -82,7 +88,10 @@ export const FixtureManifestSchema = z
     );
     for (const required of REQUIRED_CASES) {
       if (!labeled.has(required)) {
-        context.addIssue({ code: "custom", message: `required case has no fixture: ${required}` });
+        context.addIssue({
+          code: "custom",
+          message: `required case has no fixture: ${required}`,
+        });
       }
     }
   });
@@ -108,9 +117,15 @@ export const splitForDirectory = (
   directory: string,
 ): "dev" | "held_out" | undefined => {
   const normalized = directory.replace(/\/$/, "");
-  if (manifest.heldOut.directories.some((item) => withinDirectory(normalized, item)))
+  if (
+    manifest.heldOut.directories.some((item) =>
+      withinDirectory(normalized, item),
+    )
+  )
     return "held_out";
-  if (manifest.dev.directories.some((item) => withinDirectory(normalized, item)))
+  if (
+    manifest.dev.directories.some((item) => withinDirectory(normalized, item))
+  )
     return "dev";
   return undefined;
 };
@@ -121,12 +136,20 @@ export const loadFixtures = async (
 ): Promise<LoadedFixture[]> => {
   const manifest = await loadManifest(manifestPath);
   const split = splitForDirectory(manifest, directory);
-  if (split === undefined) throw new Error(`fixture directory is not declared in ${manifestPath}: ${directory}`);
-  const labels = split === "dev" ? manifest.dev.fixtures : manifest.heldOut.fixtures;
+  if (split === undefined)
+    throw new Error(
+      `fixture directory is not declared in ${manifestPath}: ${directory}`,
+    );
+  const labels =
+    split === "dev" ? manifest.dev.fixtures : manifest.heldOut.fixtures;
   const byFile = new Map(labels.map((label) => [label.file, label]));
-  const files = (await readdir(directory)).filter((file) => file.endsWith(".json")).sort();
+  const files = (await readdir(directory))
+    .filter((file) => file.endsWith(".json"))
+    .sort();
   const normalizedDirectory = directory.replace(/\/$/, "");
-  const discovered = new Set(files.map((file) => `${normalizedDirectory}/${file}`));
+  const discovered = new Set(
+    files.map((file) => `${normalizedDirectory}/${file}`),
+  );
   const missing = labels
     .map(({ file }) => file)
     .filter(
@@ -134,17 +157,22 @@ export const loadFixtures = async (
         withinDirectory(file, normalizedDirectory) && !discovered.has(file),
     );
   if (missing.length > 0)
-    throw new Error(`manifest fixtures are missing from ${directory}: ${missing.join(", ")}`);
+    throw new Error(
+      `manifest fixtures are missing from ${directory}: ${missing.join(", ")}`,
+    );
   return Promise.all(
     files.map(async (file) => {
       const relative = `${normalizedDirectory}/${file}`;
       const label = byFile.get(relative);
-      if (label === undefined) throw new Error(`fixture has no ${split} label: ${relative}`);
+      if (label === undefined)
+        throw new Error(`fixture has no ${split} label: ${relative}`);
       const fixture = DeterministicFixtureSchema.parse(
         JSON.parse(await readFile(resolve(directory, file), "utf8")),
       );
       if (fixture.chunk.id !== label.chunkId)
-        throw new Error(`manifest chunkId does not match ${basename(relative)}`);
+        throw new Error(
+          `manifest chunkId does not match ${basename(relative)}`,
+        );
       return { path: relative, fixture, label, split };
     }),
   );
@@ -159,5 +187,7 @@ export const ArchivedJournalSchema = z
   .strict();
 export type ArchivedJournal = z.infer<typeof ArchivedJournalSchema>;
 
-export const loadArchivedJournal = async (path: string): Promise<ArchivedJournal> =>
+export const loadArchivedJournal = async (
+  path: string,
+): Promise<ArchivedJournal> =>
   ArchivedJournalSchema.parse(JSON.parse(await readFile(path, "utf8")));

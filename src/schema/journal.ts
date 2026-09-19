@@ -5,7 +5,7 @@ import {
   RelevanceResultSchema,
 } from "./classifier";
 import { SemanticComparisonSchema } from "./evaluation";
-import { ChunkIdSchema, JournalEntryIdSchema } from "./ids";
+import { ChunkIdSchema, JournalEntryIdSchema, TopicIdSchema } from "./ids";
 import { MemorySchema, TopicSchema } from "./memory";
 import { ExecutionPolicySchema } from "./policy";
 import { MemoryPatchSchema } from "./writer";
@@ -33,7 +33,45 @@ const JournalBaseSchema = z.object({
   occurredAt: z.string().datetime(),
   chunkId: ChunkIdSchema,
   snapshotRevision: z.number().int().nonnegative(),
+  attemptId: z.string().min(1).optional(),
 });
+
+export const RoutingDecisionJournalEntrySchema = JournalBaseSchema.extend({
+  type: z.literal("routing_decision"),
+  effectiveMode: z.enum(["shadow", "active", "baseline"]),
+  classifierPolicy: ClassifierPolicySchema,
+  route: z.enum(["writer", "bypass", "unavailable"]),
+  reason: z.string(),
+  affectedTopicIds: z.array(TopicIdSchema),
+  protectionOverride: z.boolean(),
+  relevance: RelevanceResultSchema.optional(),
+  assessment: AssessmentSchema.optional(),
+}).strict();
+export type RoutingDecisionJournalEntry = z.infer<
+  typeof RoutingDecisionJournalEntrySchema
+>;
+
+export const ModelCallJournalEntrySchema = JournalBaseSchema.extend({
+  type: z.literal("model_call"),
+  callId: z.string().min(1),
+  role: z.enum(["classifier", "writer", "evaluator"]),
+  operation: z.enum([
+    "relevance",
+    "relationships",
+    "propose",
+    "compress",
+    "compare",
+  ]),
+  status: z.enum(["succeeded", "failed", "timed_out"]),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  promptVersion: z.string().min(1),
+  latencyMs: z.number().nonnegative(),
+  usage: UsageSchema.optional(),
+  usageProvenance: z.enum(["reported", "estimated", "unknown"]),
+  requestIndex: z.number().int().nonnegative().optional(),
+}).strict();
+export type ModelCallJournalEntry = z.infer<typeof ModelCallJournalEntrySchema>;
 
 const ClassifierTraceSchema = z
   .object({
@@ -128,6 +166,7 @@ export const GateDecisionJournalEntrySchema = JournalBaseSchema.extend({
     "relationship",
     "writer",
     "patch",
+    "budget",
   ]),
   outcome: z.enum(["failure", "escalation"]),
   reason: z.string(),
@@ -146,6 +185,8 @@ export const JournalEntrySchema = z.discriminatedUnion("type", [
   SemanticComparisonJournalEntrySchema,
   SemanticComparisonFailureJournalEntrySchema,
   GateDecisionJournalEntrySchema,
+  RoutingDecisionJournalEntrySchema,
+  ModelCallJournalEntrySchema,
 ]);
 export type JournalEntry = z.infer<typeof JournalEntrySchema>;
 
@@ -154,6 +195,8 @@ export const EvaluationJournalEntrySchema = z.discriminatedUnion("type", [
   SemanticComparisonJournalEntrySchema,
   SemanticComparisonFailureJournalEntrySchema,
   GateDecisionJournalEntrySchema,
+  RoutingDecisionJournalEntrySchema,
+  ModelCallJournalEntrySchema,
 ]);
 export type EvaluationJournalEntry = z.infer<
   typeof EvaluationJournalEntrySchema

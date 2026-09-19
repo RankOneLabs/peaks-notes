@@ -1,7 +1,8 @@
-import type {
-  Evaluator,
-  SemanticComparison,
-  SemanticComparisonInput,
+import {
+  type Evaluator,
+  type SemanticComparison,
+  SemanticComparisonContract,
+  type SemanticComparisonInput,
 } from "../schema";
 import {
   AdapterError,
@@ -51,12 +52,18 @@ export class LlmEvaluator implements Evaluator {
         promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         latencyMs: 0,
+        dispatched: false,
+        usageProvenance: "estimated",
       });
     }
     const prompt = buildEvaluatorPrompt(input);
     const startedAt = performance.now();
     const inputTokens = estimateModelTokens(`${prompt.system}\n${prompt.user}`);
-    const call = (outputTokens = 0): ModelCall => ({
+    const call = (
+      outputTokens = 0,
+      dispatched = false,
+      usageProvenance: ModelCall["usageProvenance"] = "estimated",
+    ): ModelCall => ({
       provider: this.provider.id,
       model: this.config.model,
       promptVersion: EVALUATOR_PROMPT_VERSION,
@@ -66,6 +73,8 @@ export class LlmEvaluator implements Evaluator {
         totalTokens: inputTokens + outputTokens,
       },
       latencyMs: Math.max(0, performance.now() - startedAt),
+      dispatched,
+      usageProvenance,
     });
     if (inputTokens > this.config.maxInputTokens) {
       this.#lastCall = call();
@@ -89,7 +98,7 @@ export class LlmEvaluator implements Evaluator {
             model: this.config.model,
             promptVersion: EVALUATOR_PROMPT_VERSION,
             deadlineMs: this.config.deadlineMs,
-            responseSchemaName: "SemanticComparison",
+            responseContract: SemanticComparisonContract,
           })
           .then(resolve, reject)
           .finally(() => clearTimeout(timer));
@@ -100,6 +109,8 @@ export class LlmEvaluator implements Evaluator {
         promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: response.usage,
         latencyMs: Math.max(0, performance.now() - startedAt),
+        dispatched: true,
+        usageProvenance: "reported",
       };
       try {
         const result = parseSemanticComparison(response.text);
@@ -115,9 +126,9 @@ export class LlmEvaluator implements Evaluator {
       }
     } catch (cause) {
       if (cause instanceof AdapterError) throw cause;
-      this.#lastCall = call();
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
+      this.#lastCall = call(0, true, timedOut ? "unknown" : "estimated");
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut ? "evaluator deadline expired" : "evaluator provider failed",

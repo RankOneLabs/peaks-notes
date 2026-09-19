@@ -1,1 +1,84 @@
-{"name":"held-out qualifying condition","description":"A new qualifier extends an existing topic.","initialMemory":{"revision":1,"topics":[{"id":"topic-1","title":"Deploy","description":"Deployment rule","version":1,"summary":"Deploy Fridays.","sources":[{"messageId":"old-deploy"}],"unresolved":[]}],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-held-qualifier","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-held-qualifier","role":"user","content":"Deploy Fridays only after QA approval."}]},"taskContext":{"currentTask":"Deploy","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"active","bypassAuditRate":0,"auditSeed":"held"},"stubs":{"relevance":[{"output":{"topics":[{"topicId":"topic-1","score":0.95}]}}],"assessments":[{"output":{"relations":[{"topicId":"topic-1","relationship":"new_info","confidence":0.95}],"uncovered":{"outcome":"none","confidence":0.95}}}],"proposals":[{"output":{"replacements":[{"topicId":"topic-1","expectedVersion":1,"title":"Deploy","description":"Deployment rule","summary":"Deploy Fridays only after QA approval.","sources":[{"messageId":"message-held-qualifier"}],"unresolved":[]}],"newTopics":[],"addProtected":[],"supersedeProtected":[]}}],"compressions":[],"comparisons":[]},"expected":{"status":"committed","revision":2}}
+{
+  "name": "held-out qualifying condition",
+  "description": "A new qualifier extends an existing topic.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Deploy",
+        "description": "Deployment rule",
+        "version": 1,
+        "summary": "Deploy Fridays.",
+        "sources": [{ "messageId": "old-deploy" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-held-qualifier",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-held-qualifier",
+        "role": "user",
+        "content": "Deploy Fridays only after QA approval."
+      }
+    ]
+  },
+  "taskContext": { "currentTask": "Deploy", "compactionInstructions": [] },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 0,
+    "auditSeed": "held"
+  },
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.95 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-1",
+              "relationship": "new_info",
+              "confidence": 0.95
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.95 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Deploy",
+              "description": "Deployment rule",
+              "summary": "Deploy Fridays only after QA approval.",
+              "sources": [{ "messageId": "message-held-qualifier" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 2 }
+}

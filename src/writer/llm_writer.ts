@@ -4,6 +4,7 @@ import type {
   UpdateInput,
   Writer,
 } from "../schema";
+import { MemoryPatchContract } from "../schema";
 import { parseMemoryPatch } from "./parse";
 import { buildCompressPrompt, buildUpdatePrompt } from "./prompt";
 import {
@@ -43,12 +44,18 @@ export class LlmWriter implements Writer {
       outputTokens: 0,
       totalTokens: inputTokens,
     };
-    const call = (usage = emptyUsage): ModelCall => ({
+    const call = (
+      usage = emptyUsage,
+      dispatched = false,
+      usageProvenance: ModelCall["usageProvenance"] = "estimated",
+    ): ModelCall => ({
       provider: this.provider.id,
       model: this.config.model,
       promptVersion: this.config.promptVersion,
       usage,
       latencyMs: Math.max(0, performance.now() - startedAt),
+      dispatched,
+      usageProvenance,
     });
     if (inputTokens > this.config.maxInputTokens) {
       this.#lastCall = call();
@@ -73,15 +80,19 @@ export class LlmWriter implements Writer {
             model: this.config.model,
             promptVersion: this.config.promptVersion,
             deadlineMs: this.config.deadlineMs,
-            responseSchemaName: "MemoryPatch",
+            responseContract: MemoryPatchContract,
           })
           .then(resolve, reject)
           .finally(() => clearTimeout(timer));
       });
     } catch (cause) {
-      this.#lastCall = call();
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
+      this.#lastCall = call(
+        emptyUsage,
+        true,
+        timedOut ? "unknown" : "estimated",
+      );
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut
@@ -91,7 +102,10 @@ export class LlmWriter implements Writer {
         cause,
       );
     }
-    const completedCall = { ...call(response.usage), model: response.model };
+    const completedCall = {
+      ...call(response.usage, true, "reported"),
+      model: response.model,
+    };
     this.#lastCall = completedCall;
     try {
       const result = parseMemoryPatch(response.text);

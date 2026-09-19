@@ -24,6 +24,7 @@ export type CommitBuildOptions = {
   writerModel?: ModelIdentifier;
   writerUsage?: Usage;
   writerLatencyMs?: number;
+  attemptId?: string;
 };
 
 export const buildCommit = (
@@ -48,10 +49,13 @@ export const buildCommit = (
       chunkId: chunk.id,
       journalEntry: {
         type: "no_update",
-        id: `journal-${chunk.id}-no-update` as Commit["journalEntry"]["id"],
+        id: `journal-${chunk.id}-${options.attemptId ?? "legacy"}-no-update` as Commit["journalEntry"]["id"],
         occurredAt,
         chunkId: chunk.id,
         snapshotRevision: before.revision,
+        ...(options.attemptId === undefined
+          ? {}
+          : { attemptId: options.attemptId }),
         previousRevision: before.revision,
         newRevision: before.revision,
         classifier,
@@ -65,10 +69,13 @@ export const buildCommit = (
     memory: after,
     journalEntry: {
       type: "committed_update",
-      id: `journal-${chunk.id}-commit` as Commit["journalEntry"]["id"],
+      id: `journal-${chunk.id}-${options.attemptId ?? "legacy"}-commit` as Commit["journalEntry"]["id"],
       occurredAt,
       chunkId: chunk.id,
       snapshotRevision: before.revision,
+      ...(options.attemptId === undefined
+        ? {}
+        : { attemptId: options.attemptId }),
       previousRevision: before.revision,
       newRevision: after.revision,
       ...(Object.keys(classifier).length === 0 ? {} : { classifier }),

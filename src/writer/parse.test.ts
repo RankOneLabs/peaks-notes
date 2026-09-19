@@ -171,23 +171,26 @@ test("OpenAI checks status before decoding and disables response storage", async
 });
 
 test("writer records the provider-resolved model", async () => {
-  const writer = new LlmWriter(
-    new RecordedProvider([
-      {
-        response: {
-          text: JSON.stringify({
-            replacements: [],
-            newTopics: [],
-            addProtected: [],
-            supersedeProtected: [],
-          }),
-          model: "resolved-model-2026-09-18",
-          usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
-        },
+  const provider = new RecordedProvider([
+    {
+      response: {
+        text: JSON.stringify({
+          replacements: [],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        }),
+        model: "resolved-model-2026-09-18",
+        usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
       },
-    ]),
-    config,
-  );
+    },
+  ]);
+  const writer = new LlmWriter(provider, config);
   await writer.propose(input);
   expect(writer.getLastCall()?.model).toBe("resolved-model-2026-09-18");
+  expect(provider.requests[0]?.responseContract).toMatchObject({
+    name: "MemoryPatch",
+    version: 1,
+    schema: expect.objectContaining({ type: "object" }),
+  });
 });

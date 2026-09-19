@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ModelAdapterConfig } from "../config";
+import type { ResponseContract } from "../schema";
 
 export type { ModelAdapterConfig } from "../config";
 
@@ -15,6 +16,8 @@ export type ModelCall = {
   promptVersion: string;
   usage: ModelUsage;
   latencyMs: number;
+  dispatched?: boolean;
+  usageProvenance?: "reported" | "estimated" | "unknown";
 };
 
 export type GenerateRequest = {
@@ -23,7 +26,9 @@ export type GenerateRequest = {
   model: string;
   promptVersion: string;
   deadlineMs: number;
-  responseSchemaName: string;
+  responseContract?: ResponseContract;
+  /** @deprecated Use responseContract. */
+  responseSchemaName?: string;
 };
 
 export type GenerateResponse = {
@@ -143,7 +148,17 @@ export const createProvider = (
                   instructions: request.system,
                   input: request.user,
                   store: false,
-                  text: { format: { type: "json_object" } },
+                  text:
+                    request.responseContract === undefined
+                      ? { format: { type: "json_object" } }
+                      : {
+                          format: {
+                            type: "json_schema",
+                            name: request.responseContract.name,
+                            strict: true,
+                            schema: request.responseContract.schema,
+                          },
+                        },
                 }),
               },
             );

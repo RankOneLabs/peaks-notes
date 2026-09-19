@@ -12,7 +12,7 @@ const valid = {
 test("loads typed defaults and pins Jev", () => {
   const config = loadConfig(valid);
   expect(config.jev.model).toBe("jev-1.13.0");
-  expect(config.writer.promptVersion).toBe("writer-v1");
+  expect(config.writer.promptVersion).toBe("writer-v2");
   expect(config.evaluator.apiKey).toBe("writer-secret");
 });
 

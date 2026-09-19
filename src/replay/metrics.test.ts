@@ -10,7 +10,10 @@ const policy = {
   uncoveredNoChangeMinConfidence: 0.8,
 };
 
-const label = (chunkId: string, gate: FixtureLabel["expectedNoUpdateGate"]): FixtureLabel => ({
+const label = (
+  chunkId: string,
+  gate: FixtureLabel["expectedNoUpdateGate"],
+): FixtureLabel => ({
   file: `fixtures/deterministic/${chunkId}.json`,
   chunkId,
   requiredCases: ["equivalent_restatement"],
@@ -100,5 +103,43 @@ test("inconclusive comparisons are outside agreement and miss denominators", () 
     inconclusive: 1,
     agreementDenominator: 1,
     confirmedMissDenominator: 1,
+  });
+});
+
+test("canonical call events count each provider request without aggregate duplication", () => {
+  const base = {
+    occurredAt: "2026-09-18T00:00:00.000Z",
+    chunkId: "chunk-calls" as never,
+    snapshotRevision: 0,
+    attemptId: "attempt-calls",
+  };
+  const calls: JournalEntry[] = [
+    ["relevance", 3],
+    ["relationships", 5],
+  ].map(([operation, inputTokens], index) => ({
+    ...base,
+    type: "model_call" as const,
+    id: `journal-call-${index}` as never,
+    callId: `call-${index}`,
+    role: "classifier" as const,
+    operation: operation as "relevance" | "relationships",
+    status: "succeeded" as const,
+    provider: "typesafe",
+    model: "jev-1.13.0",
+    promptVersion: "v1",
+    latencyMs: 2,
+    usage: {
+      inputTokens: inputTokens as number,
+      outputTokens: 1,
+      totalTokens: (inputTokens as number) + 1,
+    },
+    usageProvenance: "reported" as const,
+  }));
+  const report = computeMetrics({ entries: calls, labels: [], policy });
+  expect(report.model.classifier).toMatchObject({
+    calls: 2,
+    inputTokens: 8,
+    outputTokens: 2,
+    totalTokens: 10,
   });
 });

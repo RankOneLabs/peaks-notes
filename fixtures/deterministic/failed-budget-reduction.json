@@ -47,11 +47,11 @@
     "bypassAuditRate": 0,
     "auditSeed": "seed"
   },
+  "budget": { "maxTokens": 1000, "summaryBudgetTokens": 5 },
   "stubs": {
     "relevance": [],
     "assessments": [],
-    "proposals": [],
-    "compressions": [
+    "proposals": [
       {
         "output": {
           "replacements": [
@@ -60,7 +60,27 @@
               "expectedVersion": 1,
               "title": "Large",
               "description": "Large summary",
-              "summary": "This summary deliberately remains unchanged after compression.",
+              "summary": "This proposed summary deliberately remains far above the configured summary budget after compression.",
+              "sources": [{ "messageId": "message-large" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 2,
+              "title": "Large",
+              "description": "Large summary",
+              "summary": "This proposed summary deliberately remains far above the configured summary budget after compression.",
               "sources": [{ "messageId": "message-large" }],
               "unresolved": []
             }
