@@ -1,4 +1,27 @@
-import { type MemoryPatch, MemoryPatchSchema } from "../schema";
+import { type MemoryPatch, MemoryPatchSchema, type SourceRef } from "../schema";
+
+const wholeMessage = ({ messageId }: SourceRef): SourceRef => ({ messageId });
+
+/**
+ * Model-generated character offsets are guesses and cannot be trusted as
+ * provenance. Keep the cited message while leaving exact ranges to
+ * deterministic host protections.
+ */
+const normalizeWriterSources = (patch: MemoryPatch): MemoryPatch => ({
+  ...patch,
+  replacements: patch.replacements.map((replacement) => ({
+    ...replacement,
+    sources: replacement.sources.map(wholeMessage),
+  })),
+  newTopics: patch.newTopics.map((topic) => ({
+    ...topic,
+    sources: topic.sources.map(wholeMessage),
+  })),
+  addProtected: patch.addProtected.map((record) => ({
+    ...record,
+    sources: record.sources.map(wholeMessage),
+  })),
+});
 
 export const parseMemoryPatch = (text: string): MemoryPatch => {
   let value: unknown;
@@ -15,5 +38,5 @@ export const parseMemoryPatch = (text: string): MemoryPatch => {
         .join("; ")}`,
     );
   }
-  return parsed.data;
+  return normalizeWriterSources(parsed.data);
 };

@@ -2,9 +2,9 @@ import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createConfiguredAdapters } from "../../adapters";
-import { loadConfig } from "../../config";
 import { SqliteStore } from "../../store/sqlite";
 import { ContentModeSchema } from "./chunks";
+import { loadSessionConfig } from "./session_config";
 import {
   acquireLock,
   prepareDirectories,
@@ -84,7 +84,7 @@ const main = async (): Promise<void> => {
   let store: SqliteStore | undefined;
   try {
     store = new SqliteStore(paths.database);
-    const config = loadConfig();
+    const config = loadSessionConfig();
     const report = await summarizeSession({
       sessionId: session,
       transcriptPath: transcript,

@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { createConfiguredAdapters } from "../../adapters";
 import type { PipelineDependencies } from "../../compact/ingest";
-import { loadConfig } from "../../config";
+import type { AppConfig } from "../../config";
 import { ConservativeTokenizer } from "../../render/estimate_tokens";
 import type { ClassifierPolicy } from "../../schema";
 import { SqliteStore } from "../../store/sqlite";
 import { flagValues, SessionIdSchema } from "./arguments";
 import { ContentModeSchema } from "./chunks";
+import { loadSessionConfig } from "./session_config";
 import {
   acquireLock,
   prepareDirectories,
@@ -41,7 +42,7 @@ export type WorkerArguments = z.infer<typeof WorkerArgumentsSchema>;
 export const sessionDependencies = (
   session: string,
   store: SqliteStore,
-  config: ReturnType<typeof loadConfig>,
+  config: AppConfig,
   adapters: ReturnType<typeof createConfiguredAdapters>,
 ): PipelineDependencies => ({
   store,
@@ -70,7 +71,7 @@ const log = (message: string): void =>
 export const runWorker = async (args: WorkerArguments): Promise<void> => {
   const paths = sessionPaths(args.project, args.session);
   prepareDirectories(paths);
-  const config = loadConfig();
+  const config = loadSessionConfig();
   const adapters = createConfiguredAdapters(config);
   let done = 0;
   while (readPending(paths.pending) > done) {
