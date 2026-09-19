@@ -33,8 +33,18 @@ const ToolResultBlockSchema = z.object({
 });
 export type ToolResultBlock = z.infer<typeof ToolResultBlockSchema>;
 
-/** Thinking, images, and any block type peaks does not read. */
-const OtherBlockSchema = z.object({ type: z.string() });
+const READ_BLOCK_TYPES = new Set(["text", "tool_use", "tool_result"]);
+
+/**
+ * Thinking, images, and any block type peaks does not read. A block whose type
+ * peaks does read must match that block's schema; falling back to here would
+ * drop it from the summary without saying so.
+ */
+const OtherBlockSchema = z.object({
+  type: z.string().refine((value) => !READ_BLOCK_TYPES.has(value), {
+    message: "block does not match the schema for its type",
+  }),
+});
 
 const ContentBlockSchema = z.union([
   TextBlockSchema,

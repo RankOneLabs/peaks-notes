@@ -1157,6 +1157,23 @@ test("protect reduces a state-changing tool to its declared receipt", () => {
   });
 });
 
+test("a state-changing receipt records an unreported outcome as no error", () => {
+  const chunk = toolChunk({
+    effect: "state_changing",
+    receiptArguments: ["file_path"],
+  }) as { messages: { toolResult?: { isError?: boolean } }[] };
+  delete chunk.messages[1]?.toolResult?.isError;
+
+  const result = protect(chunk as never);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.value[0]?.text ?? "null")).toEqual({
+    tool: "Write",
+    arguments: { file_path: "/tmp/a" },
+    isError: false,
+  });
+});
+
 test("a state-changing receipt keeps every argument by default", () => {
   const result = protect(toolChunk({ effect: "state_changing" }));
   expect(result.ok).toBe(true);

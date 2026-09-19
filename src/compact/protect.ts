@@ -45,7 +45,7 @@ const receipt = (
   text: JSON.stringify({
     tool: call.toolCall.name,
     arguments: receiptArguments(call.toolCall.arguments, keys),
-    isError: result.toolResult.isError,
+    isError: result.toolResult.isError ?? false,
   }),
   sources: [{ messageId: call.id }, { messageId: result.id }],
   status: "active",

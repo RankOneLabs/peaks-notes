@@ -97,6 +97,36 @@ test("an unreadable message entry is an error, not a silent gap", () => {
   expect(parsed.ok).toBe(false);
 });
 
+test("a malformed block of a type peaks reads is an error, not a silent gap", () => {
+  const parsed = parseTranscript(
+    jsonl(user("u1", null, "hi"), {
+      type: "assistant",
+      uuid: "a1",
+      parentUuid: "u1",
+      timestamp: "2026-09-19T00:00:01.000Z",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "t1" }] },
+    }),
+  );
+  expect(parsed.ok).toBe(false);
+});
+
+test("a block type peaks does not read is kept as an opaque block", () => {
+  expect(
+    uuids(
+      jsonl(user("u1", null, "hi"), {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        timestamp: "2026-09-19T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "..." }],
+        },
+      }),
+    ),
+  ).toEqual(["u1", "a1"]);
+});
+
 test("reading a prefix leaves a partly written line for the next run", async () => {
   directory = mkdtempSync(join(tmpdir(), "peaks-transcript-"));
   const path = join(directory, "session.jsonl");

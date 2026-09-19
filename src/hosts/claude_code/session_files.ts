@@ -43,10 +43,23 @@ export const sessionPaths = (
   };
 };
 
+const STATE_IGNORE_RULE = ".state/";
+
+/** A project may keep its own rules here, so the rule is added, not imposed. */
 export const prepareDirectories = (paths: SessionPaths): void => {
   mkdirSync(paths.state, { recursive: true });
   const ignore = join(paths.directory, ".gitignore");
-  if (!existsSync(ignore)) writeFileSync(ignore, ".state/\n");
+  if (!existsSync(ignore)) {
+    writeFileSync(ignore, `${STATE_IGNORE_RULE}\n`);
+    return;
+  }
+  const current = readFileSync(ignore, "utf8");
+  const ignored = current
+    .split("\n")
+    .some((line) => line.trim() === STATE_IGNORE_RULE);
+  if (ignored) return;
+  const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+  writeFileSync(ignore, `${current}${separator}${STATE_IGNORE_RULE}\n`);
 };
 
 export const writeAtomically = (path: string, content: string): void => {

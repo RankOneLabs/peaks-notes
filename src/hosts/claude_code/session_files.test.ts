@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireLock,
+  prepareDirectories,
   readPending,
   recordPending,
   releaseLock,
+  sessionPaths,
 } from "./session_files";
 
 let directory: string;
@@ -29,6 +38,28 @@ test("a lock whose owner has exited is taken over", () => {
   const exited = Bun.spawnSync(["true"]).pid;
   writeFileSync(lock, String(exited));
   expect(acquireLock(lock)).toBe(true);
+});
+
+test("working state is ignored even when the project wrote its own rules", () => {
+  const paths = sessionPaths(directory, "s");
+  mkdirSync(paths.directory, { recursive: true });
+  const ignore = join(paths.directory, ".gitignore");
+  writeFileSync(ignore, "*.tmp");
+
+  prepareDirectories(paths);
+
+  const lines = readFileSync(ignore, "utf8").split("\n");
+  expect(lines).toContain("*.tmp");
+  expect(lines).toContain(".state/");
+});
+
+test("the ignore rule is not added twice", () => {
+  const paths = sessionPaths(directory, "s");
+  prepareDirectories(paths);
+  prepareDirectories(paths);
+
+  const ignore = readFileSync(join(paths.directory, ".gitignore"), "utf8");
+  expect(ignore).toBe(".state/\n");
 });
 
 test("pending size only grows", () => {
