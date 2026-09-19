@@ -11,6 +11,7 @@ export const modeAction = (
   mode === "active" && routing?.kind === "bypass" ? "bypass" : "writer";
 
 export const DEFAULT_AUDIT_DEADLINE_MS = 2_000;
+export const DEFAULT_SHADOW_COMPARISON_DEADLINE_MS = 2_000;
 export const DEFAULT_WRITER_DEADLINE_MS = 30_000;
 
 export const withDeadline = async <T>(

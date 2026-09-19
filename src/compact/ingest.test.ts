@@ -8,6 +8,7 @@ import type {
   Commit,
   DomainError,
   EvaluationJournalEntry,
+  Evaluator,
   Memory,
   MemoryPatch,
   Result,
@@ -128,6 +129,11 @@ describe("deterministic fixtures", () => {
         ...(fixture.auditDeadlineMs === undefined
           ? {}
           : { auditDeadlineMs: fixture.auditDeadlineMs }),
+        ...(fixture.shadowComparisonDeadlineMs === undefined
+          ? {}
+          : {
+              shadowComparisonDeadlineMs: fixture.shadowComparisonDeadlineMs,
+            }),
         ...(fixture.writerDeadlineMs === undefined
           ? {}
           : { writerDeadlineMs: fixture.writerDeadlineMs }),
@@ -217,6 +223,75 @@ test("shadow commits a writer patch despite a confident same-info decision", asy
   });
 });
 
+test("shadow compares a proposed bypass without letting evaluator mutation alter the commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network facts",
+              summary: "LAN only, confirmed.",
+              sources: [{ messageId: "message-same" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
+  const calls: Parameters<Evaluator["compare"]>[0][] = [];
+  const evaluator: Evaluator = {
+    async compare(input) {
+      calls.push(structuredClone(input));
+      const topic = input.after.topics[0];
+      if (topic === undefined) throw new Error("comparison topic missing");
+      topic.summary = "evaluator mutation";
+      return { verdict: "material_change", changes: [] };
+    },
+  };
+
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    attemptIdFactory: () => "shadow-comparison",
+  });
+
+  expect(result.status).toBe("committed");
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.before.topics[0]?.summary).toBe("LAN only.");
+  expect(calls[0]?.after.topics[0]?.summary).toBe("LAN only, confirmed.");
+  expect(store.memory.topics[0]?.summary).toBe("LAN only, confirmed.");
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison",
+      snapshotRevision: 1,
+      comparison: { verdict: "material_change", changes: [] },
+    }),
+  );
+  expect(Object.keys(calls[0] ?? {}).sort()).toEqual(
+    ["after", "before", "chunk", "taskContext"].sort(),
+  );
+});
+
 test("active full-rate audit journals but never applies its patch", async () => {
   const fixture = fixtures.find(
     ({ name }) => name === "same-seed audit assignment",
@@ -261,6 +336,121 @@ test("active full-rate audit journals but never applies its patch", async () => 
     type: "audit_record",
     outcome: "patch",
   });
+});
+
+test("a non-settling active evaluator is bounded by the remaining audit budget", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network facts",
+              summary: "audit-only change",
+              sources: [{ messageId: "message-same" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
+  let evaluatorCalls = 0;
+  const evaluator: Evaluator = {
+    compare() {
+      evaluatorCalls += 1;
+      return new Promise(() => {});
+    },
+  };
+
+  const startedAt = performance.now();
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    auditDeadlineMs: 10,
+    attemptIdFactory: () => "bounded-active",
+  });
+
+  expect(result.status).toBe("no_update");
+  expect(performance.now() - startedAt).toBeLessThan(500);
+  expect(evaluatorCalls).toBe(1);
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison_failure",
+      outcome: "timed_out",
+    }),
+  );
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({ type: "audit_record", outcome: "patch" }),
+  );
+});
+
+test("malformed shadow comparisons are journaled but do not veto the writer commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const patch: MemoryPatch = {
+    replacements: [
+      {
+        topicId: "topic-1" as never,
+        expectedVersion: 1,
+        title: "Network",
+        description: "Network facts",
+        summary: "LAN only, confirmed.",
+        sources: [{ messageId: "message-same" as never }],
+        unresolved: [],
+      },
+    ],
+    newTopics: [],
+    addProtected: [],
+    supersedeProtected: [],
+  };
+  const evaluator = {
+    async compare() {
+      return { verdict: "not-a-verdict", changes: [] };
+    },
+  } as never;
+
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({ proposals: [{ output: patch }] }),
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    attemptIdFactory: () => "malformed-comparison",
+  });
+
+  expect(result.status).toBe("committed");
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison_failure",
+      outcome: "invalid_response",
+    }),
+  );
 });
 
 test("writer-path commits retain their routing reason", async () => {
@@ -557,6 +747,69 @@ class FailingJournalStore extends MemoryStore {
     });
   }
 }
+
+class FailingComparisonJournalStore extends MemoryStore {
+  override async appendJournal(
+    entry: EvaluationJournalEntry,
+  ): Promise<Result<void, DomainError>> {
+    if (entry.type === "semantic_comparison") {
+      return err({
+        code: "storage_error",
+        operation: "appendJournal",
+        message: "comparison journal unavailable",
+      });
+    }
+    return super.appendJournal(entry);
+  }
+}
+
+test("semantic journal failures stay isolated from a shadow commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new FailingComparisonJournalStore(fixture.initialMemory);
+  const patch: MemoryPatch = {
+    replacements: [
+      {
+        topicId: "topic-1" as never,
+        expectedVersion: 1,
+        title: "Network",
+        description: "Network facts",
+        summary: "LAN only, confirmed.",
+        sources: [{ messageId: "message-same" as never }],
+        unresolved: [],
+      },
+    ],
+    newTopics: [],
+    addProtected: [],
+    supersedeProtected: [],
+  };
+
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({ proposals: [{ output: patch }] }),
+    evaluator: new StubEvaluator([
+      { output: { verdict: "material_change", changes: [] } },
+    ]),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    attemptIdFactory: () => "journal-failure",
+  });
+
+  expect(result.status).toBe("committed");
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison_failure",
+      outcome: "failed",
+      reason: expect.stringContaining("comparison journal unavailable"),
+    }),
+  );
+});
 
 test("journal persistence failures prevent shadow commits", async () => {
   const fixture = fixtures.find(

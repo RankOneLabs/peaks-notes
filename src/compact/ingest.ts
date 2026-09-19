@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Assessment,
   Chunk,
@@ -22,6 +23,7 @@ import {
   AssessmentSchema,
   JournalEntryIdSchema,
   RelevanceResultSchema,
+  SemanticComparisonSchema,
 } from "../schema";
 import { applyPatch } from "./apply_patch";
 import { runBaseline } from "./baseline";
@@ -29,6 +31,7 @@ import { buildCommit } from "./build_commit";
 import { decideRouting, type RoutingDecision } from "./decide_routing";
 import {
   DEFAULT_AUDIT_DEADLINE_MS,
+  DEFAULT_SHADOW_COMPARISON_DEADLINE_MS,
   DEFAULT_WRITER_DEADLINE_MS,
   modeAction,
   type PipelineMode,
@@ -56,8 +59,13 @@ export type IngestDependencies = {
   classifierPolicy: ClassifierPolicy;
   executionPolicy?: ExecutionPolicy;
   mode?: "shadow" | "active" | "baseline";
+  /** Total active-audit model budget shared by writer and evaluator. */
   auditDeadlineMs?: number;
+  /** Evaluation-only budget for comparing an authoritative shadow patch. */
+  shadowComparisonDeadlineMs?: number;
   writerDeadlineMs?: number;
+  /** Test/replay hook. Production attempts use opaque UUIDs. */
+  attemptIdFactory?: () => string;
 };
 
 /** Minimal persistence port consumed by orchestration; no store implementation dependency. */
@@ -85,8 +93,14 @@ type Classification = {
   };
 };
 
-const journalId = (chunk: Chunk, suffix: string): JournalEntryId =>
-  JournalEntryIdSchema.parse(`journal-${chunk.id}-${suffix}`);
+type AttemptContext = { id: string };
+
+const journalId = (
+  chunk: Chunk,
+  attempt: AttemptContext,
+  suffix: string,
+): JournalEntryId =>
+  JournalEntryIdSchema.parse(`journal-${chunk.id}-${attempt.id}-${suffix}`);
 
 const effectiveMode = (dependencies: IngestDependencies): PipelineMode =>
   dependencies.mode ?? dependencies.executionPolicy?.mode ?? "shadow";
@@ -193,6 +207,7 @@ const retained = (chunk: Chunk, reason: string): IngestResult => ({
 
 const retainAtGate = async (
   dependencies: IngestDependencies,
+  attempt: AttemptContext,
   chunk: Chunk,
   memory: Memory,
   gate: GateDecisionJournalEntry["gate"],
@@ -201,7 +216,7 @@ const retainAtGate = async (
 ): Promise<IngestResult> => {
   const journaled = await dependencies.store.appendJournal({
     type: "gate_decision",
-    id: journalId(chunk, `gate-${gate}`),
+    id: journalId(chunk, attempt, `gate-${gate}`),
     occurredAt: chunk.createdAt,
     chunkId: chunk.id,
     snapshotRevision: memory.revision,
@@ -220,14 +235,157 @@ const retainAtGate = async (
   return retained(chunk, reason);
 };
 
+type ComparisonFailureOutcome = "timed_out" | "failed" | "invalid_response";
+
+const appendComparisonFailure = async (
+  dependencies: IngestDependencies,
+  attempt: AttemptContext,
+  chunk: Chunk,
+  memory: Memory,
+  outcome: ComparisonFailureOutcome,
+  reason: string,
+  suffix = "comparison-failure",
+): Promise<void> => {
+  try {
+    await dependencies.store.appendJournal({
+      type: "semantic_comparison_failure",
+      id: journalId(chunk, attempt, suffix),
+      occurredAt: chunk.createdAt,
+      chunkId: chunk.id,
+      snapshotRevision: memory.revision,
+      outcome,
+      reason,
+    });
+  } catch {
+    // A persistent journal outage cannot record its own diagnostic.
+  }
+};
+
+/** Evaluation-only: every failure is isolated from the authoritative path. */
+const appendSemanticComparison = async (
+  dependencies: IngestDependencies,
+  attempt: AttemptContext,
+  chunk: Chunk,
+  memory: Memory,
+  after: Memory,
+  taskContext: TaskContext,
+  deadlineMs: number,
+): Promise<void> => {
+  const evaluator = dependencies.evaluator;
+  if (evaluator === undefined) return;
+  if (deadlineMs <= 0) {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "timed_out",
+      "semantic comparison budget exhausted before evaluation",
+    );
+    return;
+  }
+
+  const startedAt = performance.now();
+  const operation = Promise.resolve()
+    .then(() =>
+      evaluator.compare({
+        before: structuredClone(memory),
+        after: structuredClone(after),
+        chunk: structuredClone(chunk),
+        taskContext: structuredClone(taskContext),
+      }),
+    )
+    .then(
+      (value) => {
+        const parsed = SemanticComparisonSchema.safeParse(value);
+        return parsed.success
+          ? { type: "comparison" as const, value: parsed.data }
+          : {
+              type: "invalid_response" as const,
+              reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
+            };
+      },
+      (cause: unknown) => ({
+        type: "failed" as const,
+        reason: `semantic comparison failed: ${message(cause)}`,
+      }),
+    );
+  const result = await withDeadline(operation, deadlineMs);
+  if (result.status === "timed_out") {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "timed_out",
+      `semantic comparison timed out after ${deadlineMs}ms`,
+    );
+    return;
+  }
+  if (result.value.type !== "comparison") {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      result.value.type,
+      result.value.reason,
+    );
+    return;
+  }
+
+  let journaled: Result<void, DomainError>;
+  try {
+    journaled = await dependencies.store.appendJournal({
+      type: "semantic_comparison",
+      id: journalId(chunk, attempt, "comparison"),
+      occurredAt: chunk.createdAt,
+      chunkId: chunk.id,
+      snapshotRevision: memory.revision,
+      comparison: result.value.value,
+      evaluatorModel: {
+        provider: "stub",
+        model: "deterministic-evaluator",
+        promptVersion: "fixture-v1",
+      },
+      evaluatorUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      evaluatorLatencyMs: Math.max(0, performance.now() - startedAt),
+    });
+  } catch (cause) {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "failed",
+      `semantic comparison journal failed: ${message(cause)}`,
+      "comparison-journal-failure",
+    );
+    return;
+  }
+  if (!journaled.ok) {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "failed",
+      `semantic comparison journal failed: ${journaled.error.message}`,
+      "comparison-journal-failure",
+    );
+  }
+};
+
 const appendAudit = async (
   dependencies: IngestDependencies,
+  attempt: AttemptContext,
   chunk: Chunk,
   memory: Memory,
   taskContext: TaskContext,
   sampled: boolean,
 ): Promise<string | undefined> => {
   const policy = executionPolicy(dependencies);
+  const auditStartedAt = performance.now();
   let outcome:
     | "not_sampled"
     | "empty_patch"
@@ -266,7 +424,7 @@ const appendAudit = async (
   }
   const journaled = await dependencies.store.appendJournal({
     type: "audit_record",
-    id: journalId(chunk, "audit"),
+    id: journalId(chunk, attempt, "audit"),
     occurredAt: chunk.createdAt,
     chunkId: chunk.id,
     snapshotRevision: memory.revision,
@@ -278,37 +436,21 @@ const appendAudit = async (
   });
   if (!journaled.ok) return `audit journal failed: ${journaled.error.message}`;
 
-  if (
-    patch !== undefined &&
-    hasChanges(patch) &&
-    dependencies.evaluator !== undefined
-  ) {
-    try {
-      const after = applyPatch(memory, patch);
-      const comparison = await dependencies.evaluator.compare({
-        before: memory,
-        after,
-        chunk,
-        taskContext,
-      });
-      await dependencies.store.appendJournal({
-        type: "semantic_comparison",
-        id: journalId(chunk, "comparison"),
-        occurredAt: chunk.createdAt,
-        chunkId: chunk.id,
-        snapshotRevision: memory.revision,
-        comparison,
-        evaluatorModel: {
-          provider: "stub",
-          model: "deterministic-evaluator",
-          promptVersion: "fixture-v1",
-        },
-        evaluatorUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        evaluatorLatencyMs: 0,
-      });
-    } catch {
-      // Comparisons are evaluation-only and never change the live decision.
-    }
+  if (patch !== undefined && hasChanges(patch)) {
+    const deadline = dependencies.auditDeadlineMs ?? DEFAULT_AUDIT_DEADLINE_MS;
+    const remainingMs = Math.max(
+      0,
+      deadline - (performance.now() - auditStartedAt),
+    );
+    await appendSemanticComparison(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      applyPatch(memory, patch),
+      taskContext,
+      remainingMs,
+    );
   }
   return undefined;
 };
@@ -328,6 +470,9 @@ export const ingest = async (
   if (memory.processedChunkIds.includes(chunk.id)) {
     return { status: "replayed", chunkId: chunk.id, revision: memory.revision };
   }
+  const attempt = {
+    id: dependencies.attemptIdFactory?.() ?? randomUUID(),
+  };
   const mode = effectiveMode(dependencies);
   if (
     dependencies.mode !== undefined &&
@@ -337,6 +482,7 @@ export const ingest = async (
   ) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       "configuration",
@@ -348,6 +494,7 @@ export const ingest = async (
   if (!protectedResult.ok) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       "protect",
@@ -374,6 +521,7 @@ export const ingest = async (
   if (mode === "active" && classification.failure !== undefined) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       classification.failure.gate,
@@ -381,10 +529,12 @@ export const ingest = async (
       `classifier escalation: ${classification.failure.message}`,
     );
   }
-  if (mode === "shadow" && classification.routing?.kind === "bypass") {
+  const proposedShadowBypass =
+    mode === "shadow" && classification.routing?.kind === "bypass";
+  if (proposedShadowBypass) {
     const journaled = await dependencies.store.appendJournal({
       type: "audit_record",
-      id: journalId(chunk, "shadow-routing"),
+      id: journalId(chunk, attempt, "shadow-routing"),
       occurredAt: chunk.createdAt,
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
@@ -413,6 +563,7 @@ export const ingest = async (
     );
     const auditFailure = await appendAudit(
       dependencies,
+      attempt,
       chunk,
       memory,
       taskContext,
@@ -476,6 +627,7 @@ export const ingest = async (
   if (proposalResult.status === "timed_out") {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       "writer",
@@ -486,6 +638,7 @@ export const ingest = async (
   if (proposalResult.value.type === "failed") {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       "writer",
@@ -498,6 +651,7 @@ export const ingest = async (
   if (!proposedValid.ok) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       proposedValid.error.gate,
@@ -514,6 +668,7 @@ export const ingest = async (
   if (protectedCollision !== undefined) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       "patch",
@@ -532,6 +687,7 @@ export const ingest = async (
   if (!valid.ok) {
     return retainAtGate(
       dependencies,
+      attempt,
       chunk,
       memory,
       valid.error.gate,
@@ -541,6 +697,18 @@ export const ingest = async (
   }
   const changed = hasChanges(valid.value);
   const after = changed ? applyPatch(memory, valid.value, chunk.id) : undefined;
+  if (proposedShadowBypass && changed && after !== undefined) {
+    await appendSemanticComparison(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      after,
+      taskContext,
+      dependencies.shadowComparisonDeadlineMs ??
+        DEFAULT_SHADOW_COMPARISON_DEADLINE_MS,
+    );
+  }
   const commit = buildCommit(
     memory,
     after,

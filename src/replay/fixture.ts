@@ -42,6 +42,7 @@ export const DeterministicFixtureSchema = z
     classifierPolicy: ClassifierPolicySchema,
     executionPolicy: ExecutionPolicySchema,
     auditDeadlineMs: z.number().int().positive().optional(),
+    shadowComparisonDeadlineMs: z.number().int().positive().optional(),
     writerDeadlineMs: z.number().int().positive().optional(),
     stubs: z
       .object({

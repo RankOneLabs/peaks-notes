@@ -106,6 +106,17 @@ export type SemanticComparisonJournalEntry = z.infer<
   typeof SemanticComparisonJournalEntrySchema
 >;
 
+/** An inconclusive semantic comparison, kept apart from live commits. */
+export const SemanticComparisonFailureJournalEntrySchema =
+  JournalBaseSchema.extend({
+    type: z.literal("semantic_comparison_failure"),
+    outcome: z.enum(["timed_out", "failed", "invalid_response"]),
+    reason: z.string(),
+  }).strict();
+export type SemanticComparisonFailureJournalEntry = z.infer<
+  typeof SemanticComparisonFailureJournalEntrySchema
+>;
+
 /** A retained gate decision, including all policy values needed for replay. */
 export const GateDecisionJournalEntrySchema = JournalBaseSchema.extend({
   type: z.literal("gate_decision"),
@@ -133,6 +144,7 @@ export const JournalEntrySchema = z.discriminatedUnion("type", [
   NoUpdateJournalEntrySchema,
   AuditRecordJournalEntrySchema,
   SemanticComparisonJournalEntrySchema,
+  SemanticComparisonFailureJournalEntrySchema,
   GateDecisionJournalEntrySchema,
 ]);
 export type JournalEntry = z.infer<typeof JournalEntrySchema>;
@@ -140,6 +152,7 @@ export type JournalEntry = z.infer<typeof JournalEntrySchema>;
 export const EvaluationJournalEntrySchema = z.discriminatedUnion("type", [
   AuditRecordJournalEntrySchema,
   SemanticComparisonJournalEntrySchema,
+  SemanticComparisonFailureJournalEntrySchema,
   GateDecisionJournalEntrySchema,
 ]);
 export type EvaluationJournalEntry = z.infer<
