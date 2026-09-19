@@ -10,7 +10,10 @@ test("transcript is delimited data and never enters writer instructions", () => 
       messages: [{ id: "message-1" as never, role: "user", content: attack }],
     },
     memory: { revision: 0, topics: [], protected: [], processedChunkIds: [] },
-    taskContext: { currentTask: "Build", compactionInstructions: ["Keep paths"] },
+    taskContext: {
+      currentTask: "Build",
+      compactionInstructions: ["Keep paths"],
+    },
     affectedTopicIds: [],
   });
   expect(prompt.system).not.toContain(attack);

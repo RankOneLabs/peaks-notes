@@ -1,4 +1,9 @@
-import type { Assessment, Relationship, RelevanceResult, TopicId } from "../../schema";
+import type {
+  Assessment,
+  Relationship,
+  RelevanceResult,
+  TopicId,
+} from "../../schema";
 import type { JevRequest, JevResponse } from "./wire";
 
 export type AnswerTrace = {
@@ -20,7 +25,8 @@ export const normalizeRelevance = (
     if (response === undefined) throw new Error("missing Jev batch response");
     for (const id of Object.keys(request.questions)) {
       const answer = response.answers[id];
-      if (answer?.type !== "noul") throw new Error(`missing noul answer for ${id}`);
+      if (answer?.type !== "noul")
+        throw new Error(`missing noul answer for ${id}`);
       topics.push({ topicId: id as TopicId, score: answer.noul });
       trace.push({ questionId: id, probability: answer.noul });
     }
@@ -40,7 +46,8 @@ export const normalizeRelationships = (
     if (response === undefined) throw new Error("missing Jev batch response");
     for (const id of Object.keys(request.questions)) {
       const answer = response.answers[id];
-      if (answer?.type !== "choice") throw new Error(`missing choice answer for ${id}`);
+      if (answer?.type !== "choice")
+        throw new Error(`missing choice answer for ${id}`);
       trace.push({
         questionId: id,
         choice: answer.choice,
@@ -61,6 +68,7 @@ export const normalizeRelationships = (
       }
     }
   });
-  if (uncovered === undefined) throw new Error("missing selected-topic answer: uncovered");
+  if (uncovered === undefined)
+    throw new Error("missing selected-topic answer: uncovered");
   return { result: { relations, uncovered }, trace };
 };

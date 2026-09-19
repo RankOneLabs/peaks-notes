@@ -46,11 +46,15 @@ export class JevClient {
 
   constructor(readonly options: JevClientOptions) {
     this.#fetch = options.fetch ?? fetch;
-    this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.#sleep =
+      options.sleep ??
+      ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#now = options.now ?? (() => performance.now());
   }
 
-  async call(request: JevRequest): Promise<{ response: JevResponse; usage: JevUsage }> {
+  async call(
+    request: JevRequest,
+  ): Promise<{ response: JevResponse; usage: JevUsage }> {
     const startedAt = this.#now();
     let delayMs = 100;
     for (;;) {
@@ -82,17 +86,23 @@ export class JevClient {
       } catch (cause) {
         clearTimeout(timer);
         const nowElapsed = Math.max(0, this.#now() - startedAt);
-        const timedOut = cause instanceof DOMException && cause.name === "AbortError";
+        const timedOut =
+          cause instanceof DOMException && cause.name === "AbortError";
         throw new JevClientError(
           timedOut ? "timeout" : "http_error",
-          timedOut ? `Jev deadline expired after ${nowElapsed}ms` : "Jev request failed",
+          timedOut
+            ? `Jev deadline expired after ${nowElapsed}ms`
+            : "Jev request failed",
           emptyUsage(nowElapsed),
           cause,
         );
       }
       clearTimeout(timer);
       if (response.status === 429 || response.status === 529) {
-        const wait = Math.min(delayMs, this.options.deadlineMs - (this.#now() - startedAt));
+        const wait = Math.min(
+          delayMs,
+          this.options.deadlineMs - (this.#now() - startedAt),
+        );
         if (wait <= 0) continue;
         await this.#sleep(wait);
         delayMs *= 2;
@@ -117,7 +127,8 @@ export class JevClient {
           usage: {
             inputTokens,
             outputTokens,
-            costUsd: (inputTokens / 1_000_000) * JEV_INPUT_COST_PER_MILLION_TOKENS_USD,
+            costUsd:
+              (inputTokens / 1_000_000) * JEV_INPUT_COST_PER_MILLION_TOKENS_USD,
             latencyMs,
           },
         };

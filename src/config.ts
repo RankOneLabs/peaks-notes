@@ -53,7 +53,10 @@ const required = (
 ): string => {
   const value = environment[field];
   if (value === undefined || value.trim() === "") {
-    throw new ConfigurationError(`missing required configuration: ${field}`, field);
+    throw new ConfigurationError(
+      `missing required configuration: ${field}`,
+      field,
+    );
   }
   return value;
 };
@@ -92,29 +95,50 @@ export const loadConfig = (
   const raw = {
     writer: {
       provider: writerProvider.data,
-      apiKey: required(environment, "WRITER_API_KEY" in environment ? "WRITER_API_KEY" : writerKeyField),
+      apiKey: required(
+        environment,
+        "WRITER_API_KEY" in environment ? "WRITER_API_KEY" : writerKeyField,
+      ),
       model: required(environment, "WRITER_MODEL"),
       ...(environment.WRITER_ENDPOINT === undefined
         ? {}
         : { endpoint: environment.WRITER_ENDPOINT }),
       deadlineMs: optional(environment, "WRITER_DEADLINE_MS", "30000"),
-      promptVersion: optional(environment, "WRITER_PROMPT_VERSION", "writer-v1"),
-      maxInputTokens: Number(optional(environment, "WRITER_MAX_INPUT_TOKENS", "32000")),
+      promptVersion: optional(
+        environment,
+        "WRITER_PROMPT_VERSION",
+        "writer-v1",
+      ),
+      maxInputTokens: Number(
+        optional(environment, "WRITER_MAX_INPUT_TOKENS", "32000"),
+      ),
     },
     evaluator: {
       provider: evaluatorProvider.data,
       apiKey:
         environment.EVALUATOR_API_KEY ??
         (evaluatorProvider.data === writerProvider.data
-          ? required(environment, "WRITER_API_KEY" in environment ? "WRITER_API_KEY" : writerKeyField)
+          ? required(
+              environment,
+              "WRITER_API_KEY" in environment
+                ? "WRITER_API_KEY"
+                : writerKeyField,
+            )
           : required(environment, evaluatorKeyField)),
-      model: environment.EVALUATOR_MODEL ?? required(environment, "WRITER_MODEL"),
+      model:
+        environment.EVALUATOR_MODEL ?? required(environment, "WRITER_MODEL"),
       ...(environment.EVALUATOR_ENDPOINT === undefined
         ? {}
         : { endpoint: environment.EVALUATOR_ENDPOINT }),
       deadlineMs: optional(environment, "EVALUATOR_DEADLINE_MS", "30000"),
-      promptVersion: optional(environment, "EVALUATOR_PROMPT_VERSION", "evaluator-v1"),
-      maxInputTokens: Number(optional(environment, "EVALUATOR_MAX_INPUT_TOKENS", "32000")),
+      promptVersion: optional(
+        environment,
+        "EVALUATOR_PROMPT_VERSION",
+        "evaluator-v1",
+      ),
+      maxInputTokens: Number(
+        optional(environment, "EVALUATOR_MAX_INPUT_TOKENS", "32000"),
+      ),
     },
     jev: {
       bearerKey: required(environment, "JEV_BEARER_KEY"),
@@ -125,8 +149,12 @@ export const loadConfig = (
         "https://api.typesafe.ai/v1/systemone",
       ),
       deadlineMs: optional(environment, "JEV_DEADLINE_MS", "30000"),
-      maxInputTokens: Number(optional(environment, "JEV_MAX_INPUT_TOKENS", "32000")),
-      contextTokens: Number(optional(environment, "JEV_CONTEXT_TOKENS", "64000")),
+      maxInputTokens: Number(
+        optional(environment, "JEV_MAX_INPUT_TOKENS", "32000"),
+      ),
+      contextTokens: Number(
+        optional(environment, "JEV_CONTEXT_TOKENS", "64000"),
+      ),
     },
   };
   const parsed = AppConfigSchema.safeParse(raw);

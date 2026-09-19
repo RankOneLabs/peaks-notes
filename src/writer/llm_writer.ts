@@ -1,13 +1,19 @@
-import type { CompressInput, MemoryPatch, UpdateInput, Writer } from "../schema";
+import type {
+  CompressInput,
+  MemoryPatch,
+  UpdateInput,
+  Writer,
+} from "../schema";
+import { parseMemoryPatch } from "./parse";
+import { buildCompressPrompt, buildUpdatePrompt } from "./prompt";
 import {
   AdapterError,
   estimateModelTokens,
+  type GenerateResponse,
   type GenerativeProvider,
   type ModelAdapterConfig,
   type ModelCall,
 } from "./provider";
-import { buildCompressPrompt, buildUpdatePrompt } from "./prompt";
-import { parseMemoryPatch } from "./parse";
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
@@ -18,7 +24,9 @@ export class LlmWriter implements Writer {
   ) {}
 
   getLastCall(): ModelCall | undefined {
-    return this.#lastCall === undefined ? undefined : structuredClone(this.#lastCall);
+    return this.#lastCall === undefined
+      ? undefined
+      : structuredClone(this.#lastCall);
   }
 
   async #call(prompt: { system: string; user: string }): Promise<MemoryPatch> {
@@ -44,29 +52,30 @@ export class LlmWriter implements Writer {
         this.#lastCall,
       );
     }
-    let response;
+    let response: GenerateResponse;
     try {
-      response = await new Promise<Awaited<ReturnType<GenerativeProvider["generate"]>>>(
-        (resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new DOMException("deadline expired", "AbortError")),
-            this.config.deadlineMs,
-          );
-          this.provider
-            .generate({
-              ...prompt,
-              model: this.config.model,
-              promptVersion: this.config.promptVersion,
-              deadlineMs: this.config.deadlineMs,
-              responseSchemaName: "MemoryPatch",
-            })
-            .then(resolve, reject)
-            .finally(() => clearTimeout(timer));
-        },
-      );
+      response = await new Promise<
+        Awaited<ReturnType<GenerativeProvider["generate"]>>
+      >((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new DOMException("deadline expired", "AbortError")),
+          this.config.deadlineMs,
+        );
+        this.provider
+          .generate({
+            ...prompt,
+            model: this.config.model,
+            promptVersion: this.config.promptVersion,
+            deadlineMs: this.config.deadlineMs,
+            responseSchemaName: "MemoryPatch",
+          })
+          .then(resolve, reject)
+          .finally(() => clearTimeout(timer));
+      });
     } catch (cause) {
       this.#lastCall = call();
-      const timedOut = cause instanceof DOMException && cause.name === "AbortError";
+      const timedOut =
+        cause instanceof DOMException && cause.name === "AbortError";
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut

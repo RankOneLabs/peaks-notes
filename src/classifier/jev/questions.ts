@@ -97,8 +97,10 @@ export const relationshipQuestions = (
       criteria: {
         none: "No meaningful content remains outside the selected topics.",
         new_topic: "Meaningful durable content requires a genuinely new topic.",
-        transient: "Only transient content remains and it need not enter memory.",
-        uncertain: "Coverage cannot be determined reliably from the supplied evidence.",
+        transient:
+          "Only transient content remains and it need not enter memory.",
+        uncertain:
+          "Coverage cannot be determined reliably from the supplied evidence.",
       },
     },
   },

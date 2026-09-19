@@ -8,9 +8,19 @@ import { RecordedProvider } from "./recorded";
 test("parses an exact MemoryPatch JSON object", () => {
   expect(
     parseMemoryPatch(
-      JSON.stringify({ replacements: [], newTopics: [], addProtected: [], supersedeProtected: [] }),
+      JSON.stringify({
+        replacements: [],
+        newTopics: [],
+        addProtected: [],
+        supersedeProtected: [],
+      }),
     ),
-  ).toEqual({ replacements: [], newTopics: [], addProtected: [], supersedeProtected: [] });
+  ).toEqual({
+    replacements: [],
+    newTopics: [],
+    addProtected: [],
+    supersedeProtected: [],
+  });
 });
 
 test("rejects malformed JSON and non-patch output", () => {

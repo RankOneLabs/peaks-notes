@@ -5,15 +5,26 @@ import { relationshipQuestions, relevanceQuestions } from "./questions";
 const chunk = {
   id: "chunk-1" as never,
   createdAt: "2026-09-18T00:00:00.000Z",
-  messages: [{ id: "message-1" as never, role: "user" as const, content: "LAN update" }],
+  messages: [
+    { id: "message-1" as never, role: "user" as const, content: "LAN update" },
+  ],
 };
-const taskContext = { currentTask: "configure LAN", compactionInstructions: ["keep IPs"] };
+const taskContext = {
+  currentTask: "configure LAN",
+  compactionInstructions: ["keep IPs"],
+};
 
 test("relevance has one noul question keyed by topic id", () => {
   const input: RelevanceInput = {
     chunk,
     taskContext,
-    topics: [{ id: "topic-network" as never, title: "Network", description: "LAN facts" }],
+    topics: [
+      {
+        id: "topic-network" as never,
+        title: "Network",
+        description: "LAN facts",
+      },
+    ],
   };
   const built = relevanceQuestions(input);
   expect(Object.keys(built.questions)).toEqual(["topic-network"]);
@@ -39,7 +50,13 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
         unresolved: [],
       },
     ],
-    topicCatalog: [{ id: "topic-network" as never, title: "Network", description: "LAN facts" }],
+    topicCatalog: [
+      {
+        id: "topic-network" as never,
+        title: "Network",
+        description: "LAN facts",
+      },
+    ],
     protectedRecords: [],
   };
   const built = relationshipQuestions(input);

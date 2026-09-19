@@ -15,7 +15,10 @@ const success = {
 };
 
 test("429 followed by 200 retries with bearer authorization", async () => {
-  const recorded = recordedJevFetch([{ status: 429 }, { status: 200, body: success }]);
+  const recorded = recordedJevFetch([
+    { status: 429 },
+    { status: 200, body: success },
+  ]);
   const client = new JevClient({
     bearerKey: "secret",
     deadlineMs: 1000,
@@ -25,11 +28,15 @@ test("429 followed by 200 retries with bearer authorization", async () => {
   const result = await client.call(request);
   expect(result.response.answers.topic).toMatchObject({ noul: 0.9 });
   expect(recorded.requests).toHaveLength(2);
-  expect(new Headers(recorded.requests[0]?.init?.headers).get("Authorization")).toBe("Bearer secret");
+  expect(
+    new Headers(recorded.requests[0]?.init?.headers).get("Authorization"),
+  ).toBe("Bearer secret");
 });
 
 test("repeated throttling past deadline is a typed timeout with usage", async () => {
-  const recorded = recordedJevFetch(Array.from({ length: 10 }, () => ({ status: 529 })));
+  const recorded = recordedJevFetch(
+    Array.from({ length: 10 }, () => ({ status: 529 })),
+  );
   let now = 0;
   const client = new JevClient({
     bearerKey: "secret",

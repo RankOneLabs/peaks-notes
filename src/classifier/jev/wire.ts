@@ -91,10 +91,16 @@ export const parseJevResponse = (
       if (!allowed.has(answer.choice))
         throw new Error(`choice outside criteria for question id: ${id}`);
       if (
-        Object.keys(answer.probabilities).some((choice) => !allowed.has(choice)) ||
-        [...allowed].some((choice) => answer.probabilities[choice] === undefined)
+        Object.keys(answer.probabilities).some(
+          (choice) => !allowed.has(choice),
+        ) ||
+        [...allowed].some(
+          (choice) => answer.probabilities[choice] === undefined,
+        )
       ) {
-        throw new Error(`invalid probability distribution for question id: ${id}`);
+        throw new Error(
+          `invalid probability distribution for question id: ${id}`,
+        );
       }
     }
   }

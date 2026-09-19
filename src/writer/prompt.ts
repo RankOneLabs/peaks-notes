@@ -63,5 +63,7 @@ export const buildCompressPrompt = (input: CompressInput): Prompt => ({
     ),
     `Compress summaries to at most ${input.maxSummaryTokens} estimated tokens without removing protected records or necessary evidence.`,
   ].join("\n\n"),
-  user: ["<memory-data>", JSON.stringify(input.memory), "</memory-data>"].join("\n"),
+  user: ["<memory-data>", JSON.stringify(input.memory), "</memory-data>"].join(
+    "\n",
+  ),
 });

@@ -1,4 +1,5 @@
 import type { ModelAdapterConfig } from "../config";
+
 export type { ModelAdapterConfig } from "../config";
 
 export type ModelUsage = {
@@ -89,20 +90,23 @@ export const createProvider = (
       id: "openai",
       async generate(request) {
         const response = await withAbortDeadline(request.deadlineMs, (signal) =>
-          fetchImplementation(config.endpoint ?? "https://api.openai.com/v1/responses", {
-            method: "POST",
-            signal,
-            headers: {
-              Authorization: `Bearer ${config.apiKey}`,
-              "Content-Type": "application/json",
+          fetchImplementation(
+            config.endpoint ?? "https://api.openai.com/v1/responses",
+            {
+              method: "POST",
+              signal,
+              headers: {
+                Authorization: `Bearer ${config.apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: request.model,
+                instructions: request.system,
+                input: request.user,
+                text: { format: { type: "json_object" } },
+              }),
             },
-            body: JSON.stringify({
-              model: request.model,
-              instructions: request.system,
-              input: request.user,
-              text: { format: { type: "json_object" } },
-            }),
-          }),
+          ),
         );
         const body = (await readJson(response)) as Record<string, unknown>;
         if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
@@ -117,8 +121,13 @@ export const createProvider = (
           })
           .map((item) => (item as { text?: unknown }).text)
           .find((item): item is string => typeof item === "string");
-        if (text === undefined) throw new Error("OpenAI response omitted output text");
-        return { text, usage: usage(inputTokens, outputTokens), model: String(body.model ?? request.model) };
+        if (text === undefined)
+          throw new Error("OpenAI response omitted output text");
+        return {
+          text,
+          usage: usage(inputTokens, outputTokens),
+          model: String(body.model ?? request.model),
+        };
       },
     };
   }
@@ -126,21 +135,24 @@ export const createProvider = (
     id: "anthropic",
     async generate(request) {
       const response = await withAbortDeadline(request.deadlineMs, (signal) =>
-        fetchImplementation(config.endpoint ?? "https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          signal,
-          headers: {
-            "x-api-key": config.apiKey,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
+        fetchImplementation(
+          config.endpoint ?? "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            signal,
+            headers: {
+              "x-api-key": config.apiKey,
+              "anthropic-version": "2023-06-01",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: request.model,
+              max_tokens: 8192,
+              system: request.system,
+              messages: [{ role: "user", content: request.user }],
+            }),
           },
-          body: JSON.stringify({
-            model: request.model,
-            max_tokens: 8192,
-            system: request.system,
-            messages: [{ role: "user", content: request.user }],
-          }),
-        }),
+        ),
       );
       const body = (await readJson(response)) as Record<string, unknown>;
       if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}`);
@@ -151,8 +163,13 @@ export const createProvider = (
       const text = content
         .map((item) => (item as { text?: unknown }).text)
         .find((item): item is string => typeof item === "string");
-      if (text === undefined) throw new Error("Anthropic response omitted output text");
-      return { text, usage: usage(inputTokens, outputTokens), model: String(body.model ?? request.model) };
+      if (text === undefined)
+        throw new Error("Anthropic response omitted output text");
+      return {
+        text,
+        usage: usage(inputTokens, outputTokens),
+        model: String(body.model ?? request.model),
+      };
     },
   };
 };

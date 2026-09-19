@@ -13,7 +13,8 @@ export class IncompleteInputError extends Error {
   }
 }
 
-const size = (value: unknown): number => estimateModelTokens(JSON.stringify(value));
+const size = (value: unknown): number =>
+  estimateModelTokens(JSON.stringify(value));
 
 export const batchJevQuestions = (
   state: string,

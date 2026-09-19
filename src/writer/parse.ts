@@ -1,4 +1,4 @@
-import { MemoryPatchSchema, type MemoryPatch } from "../schema";
+import { type MemoryPatch, MemoryPatchSchema } from "../schema";
 
 export const parseMemoryPatch = (text: string): MemoryPatch => {
   let value: unknown;
