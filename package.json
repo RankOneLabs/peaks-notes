@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "replay": "bun src/replay/cli.ts",
+    "sweep": "bun src/replay/cli.ts sweep",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
