@@ -33,6 +33,23 @@ test("missing provider key fails startup and names the field", () => {
   );
 });
 
+test("OpenRouter reads its key from OPENROUTER_API_KEY", () => {
+  const config = loadConfig({
+    WRITER_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "router-secret",
+    WRITER_MODEL: "vendor/model",
+    JEV_BEARER_KEY: "jev-secret",
+  });
+  expect(config.writer).toMatchObject({
+    provider: "openrouter",
+    apiKey: "router-secret",
+  });
+  expect(config.evaluator).toMatchObject({
+    provider: "openrouter",
+    apiKey: "router-secret",
+  });
+});
+
 test("Jev aliases are rejected", () => {
   expect(() => loadConfig({ ...valid, JEV_MODEL: "jev-latest" })).toThrow(
     expect.objectContaining({ field: "jev.model" }),

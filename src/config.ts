@@ -8,7 +8,11 @@ import { WRITER_PROMPT_VERSION } from "./writer/prompt";
 
 const PositiveMillisecondsSchema = z.coerce.number().int().positive();
 
-export const GenerativeProviderSchema = z.enum(["openai", "anthropic"]);
+export const GenerativeProviderSchema = z.enum([
+  "openai",
+  "anthropic",
+  "openrouter",
+]);
 export type GenerativeProviderName = z.infer<typeof GenerativeProviderSchema>;
 
 export const ModelAdapterConfigSchema = z

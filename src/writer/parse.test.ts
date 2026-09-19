@@ -86,8 +86,8 @@ test("deadline expiry is typed and includes elapsed usage", async () => {
   }
 });
 
-test("OpenAI and Anthropic response bodies are runtime validated", async () => {
-  for (const provider of ["openai", "anthropic"] as const) {
+test("OpenAI, Anthropic, and OpenRouter response bodies are runtime validated", async () => {
+  for (const provider of ["openai", "anthropic", "openrouter"] as const) {
     const adapter = createProvider(
       { ...config, provider },
       (async () =>
@@ -113,7 +113,7 @@ test("OpenAI and Anthropic response bodies are runtime validated", async () => {
 });
 
 test("provider deadline remains active while consuming the response body", async () => {
-  for (const provider of ["openai", "anthropic"] as const) {
+  for (const provider of ["openai", "anthropic", "openrouter"] as const) {
     let signal: AbortSignal | undefined;
     const adapter = createProvider({ ...config, provider }, (async (
       _input,
@@ -252,6 +252,103 @@ test("OpenAI sends a strict-compatible schema and restores optional fields", asy
   expect(parseMemoryPatch(response.text).addProtected[0]).not.toHaveProperty(
     "supersededBy",
   );
+});
+
+test("OpenRouter sends chat messages with a strict schema it requires providers to honor", async () => {
+  let url: string | undefined;
+  let headers: Record<string, string> | undefined;
+  let body: Record<string, unknown> | undefined;
+  const adapter = createProvider(
+    { ...config, provider: "openrouter", apiKey: "router-key" },
+    (async (input, init) => {
+      url = String(input);
+      headers = init?.headers as Record<string, string>;
+      body = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          model: "vendor/model",
+          usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  replacements: [],
+                  newTopics: [],
+                  addProtected: [
+                    {
+                      id: "protected-1",
+                      kind: "constraint",
+                      text: "Keep this",
+                      sources: [
+                        { messageId: "message-1", start: null, end: null },
+                      ],
+                      status: "active",
+                    },
+                  ],
+                  supersedeProtected: [],
+                }),
+              },
+            },
+          ],
+        }),
+      );
+    }) as typeof fetch,
+  );
+
+  const response = await adapter.generate({
+    system: "system",
+    user: "user",
+    model: "vendor/model",
+    promptVersion: "test",
+    deadlineMs: 100,
+    responseContract: MemoryPatchContract,
+  });
+
+  expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
+  expect(headers?.Authorization).toBe("Bearer router-key");
+  expect(body).toMatchObject({
+    model: "vendor/model",
+    messages: [
+      { role: "system", content: "system" },
+      { role: "user", content: "user" },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: MemoryPatchContract.name, strict: true },
+    },
+    provider: { require_parameters: true },
+  });
+  expect(response.usage).toEqual({
+    inputTokens: 7,
+    outputTokens: 3,
+    totalTokens: 10,
+  });
+  expect(parseMemoryPatch(response.text).addProtected[0]).not.toHaveProperty(
+    "supersededBy",
+  );
+});
+
+test("OpenRouter checks status before decoding", async () => {
+  const adapter = createProvider(
+    { ...config, provider: "openrouter" },
+    (async () =>
+      ({
+        ok: false,
+        status: 402,
+        json: () => Promise.reject(new Error("must not decode")),
+      }) as Response) as unknown as typeof fetch,
+  );
+  await expect(
+    adapter.generate({
+      system: "system",
+      user: "user",
+      model: "model",
+      promptVersion: "test",
+      deadlineMs: 100,
+      responseSchemaName: "Test",
+    }),
+  ).rejects.toThrow("OpenRouter HTTP 402");
 });
 
 test("Anthropic sends the response contract through output_config", async () => {

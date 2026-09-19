@@ -2,7 +2,7 @@
 
 An MVP dynamic topic compactor. It reads a conversation as it happens and maintains a separate, topic-organized summary of it, backed by an append-only source archive and audit journal. It never modifies the conversation it reads.
 
-The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md).
+The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md). The Claude Code Stop hook that keeps a summary of each session in the project's `peaks/` directory is described in [docs/claude-code-hook.md](docs/claude-code-hook.md).
 
 ```sh
 bun install
@@ -23,9 +23,9 @@ Stub and recorded replays need no configuration. Live adapters read the environm
 | `JEV_ENDPOINT` | `https://api.typesafe.ai/v1/systemone` | |
 | `JEV_DEADLINE_MS` | `30000` | Per Jev request, including retries |
 | `JEV_MAX_INPUT_TOKENS` / `JEV_CONTEXT_TOKENS` | `32000` / `64000` | Request batching bounds |
-| `WRITER_PROVIDER` | `openai` | `openai` or `anthropic` |
-| `WRITER_MODEL` | required | |
-| `WRITER_API_KEY` | falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | |
+| `WRITER_PROVIDER` | `openai` | `openai`, `anthropic`, or `openrouter` (chat completions, routed only to endpoints that support structured output) |
+| `WRITER_MODEL` | required | For OpenRouter, a `vendor/model` slug that supports structured outputs |
+| `WRITER_API_KEY` | falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | |
 | `WRITER_ENDPOINT` | provider default | |
 | `WRITER_DEADLINE_MS` | `30000` | |
 | `WRITER_MAX_INPUT_TOKENS` | `32000` | |
