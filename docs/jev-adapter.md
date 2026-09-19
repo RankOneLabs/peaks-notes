@@ -1,4 +1,4 @@
-# Jev adapter facts for the topic compactor
+# Jev adapter facts for the live conversation summarizer
 
 Verified 18 September 2026. This document records the provider facts behind the adapter in `src/classifier/jev/`. The wire payload stays inside that adapter; the core schema does not expose it.
 

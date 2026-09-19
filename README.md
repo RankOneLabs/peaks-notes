@@ -1,6 +1,6 @@
 # Peaks
 
-An MVP dynamic topic compactor. It reads a conversation as it happens and maintains a separate, topic-organized summary of it, backed by an append-only source archive and audit journal. It never modifies the conversation it reads.
+An MVP live conversation summarizer. It reads completed conversation chunks as they are submitted and maintains a separate, topic-organized summary, backed by an append-only source archive and audit journal. It never modifies the conversation it reads. Handoffs and context compaction may consume the summary later, but they are not responsibilities of Peaks.
 
 The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md). The Claude Code Stop hook that keeps a summary of each session in the project's `peaks/` directory is described in [docs/claude-code-hook.md](docs/claude-code-hook.md).
 

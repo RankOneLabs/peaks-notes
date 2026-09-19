@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "summarize": "bun src/hosts/claude_code/cli.ts",
     "replay": "bun src/replay/cli.ts",
     "sweep": "bun src/replay/cli.ts sweep",
     "typecheck": "tsc --noEmit",
