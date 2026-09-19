@@ -42,6 +42,7 @@ export const DeterministicFixtureSchema = z
     classifierPolicy: ClassifierPolicySchema,
     executionPolicy: ExecutionPolicySchema,
     auditDeadlineMs: z.number().int().positive().optional(),
+    writerDeadlineMs: z.number().int().positive().optional(),
     stubs: z
       .object({
         relevance: z.array(response(RelevanceResultSchema)).default([]),
@@ -59,7 +60,6 @@ export const DeterministicFixtureSchema = z
           "replayed",
           "retained",
           "budget_exceeded",
-          "escalated",
         ]),
         revision: z.number().int().nonnegative().optional(),
         auditSampled: z.boolean().optional(),

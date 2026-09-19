@@ -55,17 +55,25 @@ export const validatePatch = (
   const protectedById = new Map(
     memory.protected.map((record) => [record.id, record]),
   );
-  const added = new Set(patch.addProtected.map(({ id }) => id));
+  const added = new Set<string>();
   for (const record of patch.addProtected) {
-    if (protectedById.has(record.id))
+    if (protectedById.has(record.id) || added.has(record.id))
       return failure(`duplicate protected record: ${record.id}`);
+    added.add(record.id);
   }
   for (const supersession of patch.supersedeProtected) {
     const current = protectedById.get(supersession.id);
     if (current === undefined)
       return failure(`unknown protected record: ${supersession.id}`);
-    if (current.kind === "explicit_pin" && current.status === "active")
-      return failure(`cannot supersede explicit pin: ${current.id}`);
+    if (supersession.id === supersession.supersededBy)
+      return failure(`protected record cannot supersede itself: ${current.id}`);
+    if (
+      current.status === "active" &&
+      (current.kind === "explicit_pin" || current.kind === "action_receipt")
+    )
+      return failure(
+        `cannot supersede protected ${current.kind}: ${current.id}`,
+      );
     if (
       !protectedById.has(supersession.supersededBy) &&
       !added.has(supersession.supersededBy)

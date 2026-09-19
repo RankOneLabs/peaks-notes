@@ -18,12 +18,22 @@ import type {
   TaskContext,
   Writer,
 } from "../schema";
-import { JournalEntryIdSchema } from "../schema";
+import {
+  AssessmentSchema,
+  JournalEntryIdSchema,
+  RelevanceResultSchema,
+} from "../schema";
 import { applyPatch } from "./apply_patch";
 import { runBaseline } from "./baseline";
 import { buildCommit } from "./build_commit";
 import { decideRouting, type RoutingDecision } from "./decide_routing";
-import { DEFAULT_AUDIT_DEADLINE_MS, modeAction, withDeadline } from "./modes";
+import {
+  DEFAULT_AUDIT_DEADLINE_MS,
+  DEFAULT_WRITER_DEADLINE_MS,
+  modeAction,
+  type PipelineMode,
+  withDeadline,
+} from "./modes";
 import { protect } from "./protect";
 import { sampleAudit } from "./sample_audit";
 import { selectTopics } from "./select_topics";
@@ -47,6 +57,7 @@ export type IngestDependencies = {
   executionPolicy?: ExecutionPolicy;
   mode?: "shadow" | "active" | "baseline";
   auditDeadlineMs?: number;
+  writerDeadlineMs?: number;
 };
 
 /** Minimal persistence port consumed by orchestration; no store implementation dependency. */
@@ -77,12 +88,21 @@ type Classification = {
 const journalId = (chunk: Chunk, suffix: string): JournalEntryId =>
   JournalEntryIdSchema.parse(`journal-${chunk.id}-${suffix}`);
 
-const executionPolicy = (dependencies: IngestDependencies): ExecutionPolicy =>
-  dependencies.executionPolicy ?? {
-    mode: dependencies.mode === "active" ? "active" : "shadow",
+const effectiveMode = (dependencies: IngestDependencies): PipelineMode =>
+  dependencies.mode ?? dependencies.executionPolicy?.mode ?? "shadow";
+
+const executionPolicy = (dependencies: IngestDependencies): ExecutionPolicy => {
+  const mode = effectiveMode(dependencies);
+  const policy = dependencies.executionPolicy ?? {
+    mode: mode === "active" ? "active" : "shadow",
     bypassAuditRate: 0,
     auditSeed: "",
   };
+  return mode === "baseline" ? policy : { ...policy, mode };
+};
+
+const schemaMessage = (issues: ReadonlyArray<{ message: string }>): string =>
+  issues.map(({ message: issue }) => issue).join("; ");
 
 const classify = async (
   chunk: Chunk,
@@ -101,15 +121,26 @@ const classify = async (
     };
   }
   try {
-    const relevance = await classifier.scoreRelevance({
-      chunk,
-      taskContext,
-      topics: memory.topics.map(({ id, title, description }) => ({
-        id,
-        title,
-        description,
-      })),
-    });
+    const relevanceResult = RelevanceResultSchema.safeParse(
+      await classifier.scoreRelevance({
+        chunk,
+        taskContext,
+        topics: memory.topics.map(({ id, title, description }) => ({
+          id,
+          title,
+          description,
+        })),
+      }),
+    );
+    if (!relevanceResult.success) {
+      return {
+        failure: {
+          gate: "classifier",
+          message: `malformed relevance response: ${schemaMessage(relevanceResult.error.issues)}`,
+        },
+      };
+    }
+    const relevance = relevanceResult.data;
     const selected = selectTopics(memory.topics, relevance, policy);
     if (!selected.ok) {
       return {
@@ -117,17 +148,29 @@ const classify = async (
         failure: { gate: selected.error.gate, message: selected.error.message },
       };
     }
-    const assessment = await classifier.classifyRelationships({
-      chunk,
-      taskContext,
-      selectedTopics: selected.value,
-      topicCatalog: memory.topics.map(({ id, title, description }) => ({
-        id,
-        title,
-        description,
-      })),
-      protectedRecords: memory.protected,
-    });
+    const assessmentResult = AssessmentSchema.safeParse(
+      await classifier.classifyRelationships({
+        chunk,
+        taskContext,
+        selectedTopics: selected.value,
+        topicCatalog: memory.topics.map(({ id, title, description }) => ({
+          id,
+          title,
+          description,
+        })),
+        protectedRecords: memory.protected,
+      }),
+    );
+    if (!assessmentResult.success) {
+      return {
+        relevance,
+        failure: {
+          gate: "classifier",
+          message: `malformed relationship response: ${schemaMessage(assessmentResult.error.issues)}`,
+        },
+      };
+    }
+    const assessment = assessmentResult.data;
     const routing = decideRouting(selected.value, assessment, policy);
     if (!routing.ok) {
       return {
@@ -156,7 +199,7 @@ const retainAtGate = async (
   outcome: GateDecisionJournalEntry["outcome"],
   reason: string,
 ): Promise<IngestResult> => {
-  await dependencies.store.appendJournal({
+  const journaled = await dependencies.store.appendJournal({
     type: "gate_decision",
     id: journalId(chunk, `gate-${gate}`),
     occurredAt: chunk.createdAt,
@@ -165,9 +208,15 @@ const retainAtGate = async (
     gate,
     outcome,
     reason,
+    effectiveMode: effectiveMode(dependencies),
     classifierPolicy: dependencies.classifierPolicy,
     executionPolicy: executionPolicy(dependencies),
   });
+  if (!journaled.ok)
+    return retained(
+      chunk,
+      `${reason}; journal failed: ${journaled.error.message}`,
+    );
   return retained(chunk, reason);
 };
 
@@ -177,7 +226,7 @@ const appendAudit = async (
   memory: Memory,
   taskContext: TaskContext,
   sampled: boolean,
-): Promise<void> => {
+): Promise<string | undefined> => {
   const policy = executionPolicy(dependencies);
   let outcome:
     | "not_sampled"
@@ -189,13 +238,15 @@ const appendAudit = async (
   if (sampled) {
     const deadline = dependencies.auditDeadlineMs ?? DEFAULT_AUDIT_DEADLINE_MS;
     const result = await withDeadline(
-      dependencies.writer
-        .propose({
-          chunk,
-          memory: structuredClone(memory),
-          taskContext,
-          affectedTopicIds: memory.topics.map(({ id }) => id),
-        })
+      Promise.resolve()
+        .then(() =>
+          dependencies.writer.propose({
+            chunk,
+            memory: structuredClone(memory),
+            taskContext,
+            affectedTopicIds: memory.topics.map(({ id }) => id),
+          }),
+        )
         .then((value) => ({ type: "patch" as const, value }))
         .catch(() => ({ type: "failed" as const })),
       deadline,
@@ -213,7 +264,7 @@ const appendAudit = async (
       }
     }
   }
-  await dependencies.store.appendJournal({
+  const journaled = await dependencies.store.appendJournal({
     type: "audit_record",
     id: journalId(chunk, "audit"),
     occurredAt: chunk.createdAt,
@@ -225,6 +276,7 @@ const appendAudit = async (
     outcome,
     ...(patch === undefined ? {} : { patch }),
   });
+  if (!journaled.ok) return `audit journal failed: ${journaled.error.message}`;
 
   if (
     patch !== undefined &&
@@ -258,6 +310,7 @@ const appendAudit = async (
       // Comparisons are evaluation-only and never change the live decision.
     }
   }
+  return undefined;
 };
 
 export const ingest = async (
@@ -275,6 +328,22 @@ export const ingest = async (
   if (memory.processedChunkIds.includes(chunk.id)) {
     return { status: "replayed", chunkId: chunk.id, revision: memory.revision };
   }
+  const mode = effectiveMode(dependencies);
+  if (
+    dependencies.mode !== undefined &&
+    dependencies.mode !== "baseline" &&
+    dependencies.executionPolicy !== undefined &&
+    dependencies.executionPolicy.mode !== dependencies.mode
+  ) {
+    return retainAtGate(
+      dependencies,
+      chunk,
+      memory,
+      "configuration",
+      "failure",
+      `mode ${dependencies.mode} conflicts with execution policy mode ${dependencies.executionPolicy.mode}`,
+    );
+  }
   const protectedResult = protect(chunk);
   if (!protectedResult.ok) {
     return retainAtGate(
@@ -286,8 +355,6 @@ export const ingest = async (
       protectedResult.error.message,
     );
   }
-  const mode =
-    dependencies.mode ?? dependencies.executionPolicy?.mode ?? "shadow";
   const classification =
     mode === "baseline"
       ? {
@@ -315,22 +382,22 @@ export const ingest = async (
     );
   }
   if (mode === "shadow" && classification.routing?.kind === "bypass") {
-    const policy = dependencies.executionPolicy ?? {
-      mode: "shadow" as const,
-      bypassAuditRate: 0,
-      auditSeed: "",
-    };
-    await dependencies.store.appendJournal({
+    const journaled = await dependencies.store.appendJournal({
       type: "audit_record",
       id: journalId(chunk, "shadow-routing"),
       occurredAt: chunk.createdAt,
       chunkId: chunk.id,
       snapshotRevision: memory.revision,
-      policy: { ...policy, mode: "shadow" },
+      policy: executionPolicy(dependencies),
       sampled: false,
       proposedBypass: true,
       outcome: "not_sampled",
     });
+    if (!journaled.ok)
+      return retained(
+        chunk,
+        `shadow routing journal failed: ${journaled.error.message}`,
+      );
   }
 
   const forcedWriter = protectedResult.value.length > 0;
@@ -338,17 +405,20 @@ export const ingest = async (
     ? "writer"
     : modeAction(mode, classification.routing);
   if (action === "bypass") {
-    const policy = dependencies.executionPolicy ?? {
-      mode: "active" as const,
-      bypassAuditRate: 0,
-      auditSeed: "",
-    };
+    const policy = executionPolicy(dependencies);
     const sampled = sampleAudit(
       chunk.id,
       policy.auditSeed,
       policy.bypassAuditRate,
     );
-    await appendAudit(dependencies, chunk, memory, taskContext, sampled);
+    const auditFailure = await appendAudit(
+      dependencies,
+      chunk,
+      memory,
+      taskContext,
+      sampled,
+    );
+    if (auditFailure !== undefined) return retained(chunk, auditFailure);
     const commit = buildCommit(memory, undefined, chunk, undefined, {
       ...(classification.relevance === undefined
         ? {}
@@ -374,45 +444,88 @@ export const ingest = async (
         };
   }
 
-  let proposed: MemoryPatch;
-  try {
-    proposed =
-      mode === "baseline"
-        ? await runBaseline(
-            dependencies.writer,
-            chunk,
-            structuredClone(memory),
-            taskContext,
-          )
-        : await dependencies.writer.propose({
-            chunk,
-            memory: structuredClone(memory),
-            taskContext,
-            affectedTopicIds:
-              mode === "shadow"
-                ? memory.topics.map(({ id }) => id)
-                : (classification.routing?.affectedTopicIds ?? []),
-            ...(mode === "active" && classification.assessment !== undefined
-              ? { assessment: classification.assessment }
-              : {}),
-          });
-  } catch (cause) {
+  const writerDeadline =
+    dependencies.writerDeadlineMs ?? DEFAULT_WRITER_DEADLINE_MS;
+  const proposalResult = await withDeadline(
+    Promise.resolve()
+      .then(() =>
+        mode === "baseline"
+          ? runBaseline(
+              dependencies.writer,
+              chunk,
+              structuredClone(memory),
+              taskContext,
+            )
+          : dependencies.writer.propose({
+              chunk,
+              memory: structuredClone(memory),
+              taskContext,
+              affectedTopicIds:
+                mode === "shadow"
+                  ? memory.topics.map(({ id }) => id)
+                  : (classification.routing?.affectedTopicIds ?? []),
+              ...(mode === "active" && classification.assessment !== undefined
+                ? { assessment: classification.assessment }
+                : {}),
+            }),
+      )
+      .then((value) => ({ type: "patch" as const, value }))
+      .catch((cause: unknown) => ({ type: "failed" as const, cause })),
+    writerDeadline,
+  );
+  if (proposalResult.status === "timed_out") {
     return retainAtGate(
       dependencies,
       chunk,
       memory,
       "writer",
       "failure",
-      `writer failed: ${message(cause)}`,
+      `writer timed out after ${writerDeadline}ms`,
+    );
+  }
+  if (proposalResult.value.type === "failed") {
+    return retainAtGate(
+      dependencies,
+      chunk,
+      memory,
+      "writer",
+      "failure",
+      `writer failed: ${message(proposalResult.value.cause)}`,
+    );
+  }
+  const proposed = proposalResult.value.value;
+  const proposedValid = validatePatch(memory, chunk, proposed);
+  if (!proposedValid.ok) {
+    return retainAtGate(
+      dependencies,
+      chunk,
+      memory,
+      proposedValid.error.gate,
+      "escalation",
+      `patch escalation: ${proposedValid.error.message}`,
+    );
+  }
+  const deterministicIds = new Set(
+    protectedResult.value.map(({ id }) => String(id)),
+  );
+  const protectedCollision = proposedValid.value.addProtected.find(({ id }) =>
+    deterministicIds.has(id),
+  );
+  if (protectedCollision !== undefined) {
+    return retainAtGate(
+      dependencies,
+      chunk,
+      memory,
+      "patch",
+      "escalation",
+      `patch escalation: writer protected record collides with deterministic protection: ${protectedCollision.id}`,
     );
   }
   const merged: MemoryPatch = {
-    ...proposed,
+    ...proposedValid.value,
     addProtected: [
-      ...proposed.addProtected,
-      ...protectedResult.value.filter(
-        (record) => !proposed.addProtected.some(({ id }) => id === record.id),
-      ),
+      ...protectedResult.value,
+      ...proposedValid.value.addProtected,
     ],
   };
   const valid = validatePatch(memory, chunk, merged);

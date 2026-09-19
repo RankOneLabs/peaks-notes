@@ -6,8 +6,7 @@ export const applyPatch = (
   memory: Memory,
   patch: MemoryPatch,
   chunkId?: ChunkId,
-  makeTopicId: TopicIdFactory = (index) =>
-    `topic-${memory.revision + 1}-${index + 1}` as TopicId,
+  makeTopicId?: TopicIdFactory,
 ): Memory => {
   const replacements = new Map(
     patch.replacements.map((item) => [item.topicId, item]),
@@ -15,6 +14,25 @@ export const applyPatch = (
   const supersessions = new Map(
     patch.supersedeProtected.map((item) => [item.id, item.supersededBy]),
   );
+  const occupiedTopicIds = new Set(memory.topics.map(({ id }) => String(id)));
+  let nextTopicOrdinal = 1;
+  const allocateTopicId = (index: number): TopicId => {
+    if (makeTopicId !== undefined) {
+      const id = makeTopicId(index);
+      if (occupiedTopicIds.has(id))
+        throw new Error(`duplicate generated topic id: ${id}`);
+      occupiedTopicIds.add(id);
+      return id;
+    }
+    let candidate = `topic-${memory.revision + 1}-${nextTopicOrdinal}`;
+    while (occupiedTopicIds.has(candidate)) {
+      nextTopicOrdinal += 1;
+      candidate = `topic-${memory.revision + 1}-${nextTopicOrdinal}`;
+    }
+    nextTopicOrdinal += 1;
+    occupiedTopicIds.add(candidate);
+    return candidate as TopicId;
+  };
   return {
     revision: memory.revision + 1,
     topics: [
@@ -34,7 +52,7 @@ export const applyPatch = (
       }),
       ...patch.newTopics.map((topic, index) => ({
         ...structuredClone(topic),
-        id: makeTopicId(index),
+        id: allocateTopicId(index),
         version: 1,
       })),
     ],

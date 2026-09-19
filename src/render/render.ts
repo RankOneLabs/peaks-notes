@@ -87,13 +87,14 @@ const compressedMemory = async (
     patch.supersedeProtected.length > 0
   )
     return undefined;
-  const topics = new Map(
-    memory.topics.map((topic) => [topic.id, topic.version]),
-  );
+  const topics = new Map(memory.topics.map((topic) => [topic.id, topic]));
   if (
-    patch.replacements.some(
-      ({ topicId, expectedVersion }) => topics.get(topicId) !== expectedVersion,
-    )
+    patch.replacements.some(({ topicId, expectedVersion, unresolved }) => {
+      const topic = topics.get(topicId);
+      if (topic === undefined || topic.version !== expectedVersion) return true;
+      const retained = new Set(unresolved);
+      return topic.unresolved.some((item) => !retained.has(item));
+    })
   )
     return undefined;
   const allowedSources = new Set(

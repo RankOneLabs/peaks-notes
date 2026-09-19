@@ -59,3 +59,70 @@ test("rejects unknown topic ids and source ids", () => {
     }).ok,
   ).toBe(false);
 });
+
+const protectedMemory = {
+  ...memory,
+  protected: [
+    {
+      id: "pin-1",
+      kind: "explicit_pin",
+      text: "keep",
+      sources: [],
+      status: "active",
+    },
+    {
+      id: "receipt-1",
+      kind: "action_receipt",
+      text: "receipt",
+      sources: [],
+      status: "active",
+    },
+  ],
+} as unknown as Memory;
+
+const emptyPatch = {
+  replacements: [],
+  newTopics: [],
+  addProtected: [],
+  supersedeProtected: [],
+};
+
+test("rejects duplicate protected ids within one patch", () => {
+  const record = {
+    id: "new-protected",
+    kind: "constraint" as const,
+    text: "constraint",
+    sources: [{ messageId: "message-1" }],
+    status: "active" as const,
+  };
+  expect(
+    validatePatch(memory, chunk, {
+      ...emptyPatch,
+      addProtected: [record, record],
+    }).ok,
+  ).toBe(false);
+});
+
+test("rejects self-supersession and superseding active receipts", () => {
+  expect(
+    validatePatch(protectedMemory, chunk, {
+      ...emptyPatch,
+      supersedeProtected: [{ id: "pin-1", supersededBy: "pin-1" }],
+    }).ok,
+  ).toBe(false);
+  expect(
+    validatePatch(protectedMemory, chunk, {
+      ...emptyPatch,
+      addProtected: [
+        {
+          id: "replacement",
+          kind: "constraint",
+          text: "replacement",
+          sources: [{ messageId: "message-1" }],
+          status: "active",
+        },
+      ],
+      supersedeProtected: [{ id: "receipt-1", supersededBy: "replacement" }],
+    }).ok,
+  ).toBe(false);
+});

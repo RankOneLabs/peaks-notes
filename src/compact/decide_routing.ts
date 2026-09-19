@@ -44,7 +44,9 @@ export const decideRouting = (
     const current = relations.get(relation.topicId);
     if (
       current === undefined ||
-      rank[relation.relationship] > rank[current.relationship]
+      rank[relation.relationship] > rank[current.relationship] ||
+      (rank[relation.relationship] === rank[current.relationship] &&
+        relation.confidence < current.confidence)
     ) {
       relations.set(relation.topicId, relation);
     }

@@ -9,14 +9,17 @@ import type {
   DomainError,
   EvaluationJournalEntry,
   Memory,
+  MemoryPatch,
   Result,
   Topic,
   TopicId,
+  Writer,
 } from "../schema";
-import { ok } from "../schema";
+import { err, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
 import { StubWriter } from "../writer/stub";
 import { ingest } from "./ingest";
+import { protect } from "./protect";
 
 class MemoryStore implements Store {
   memory: Memory;
@@ -125,6 +128,9 @@ describe("deterministic fixtures", () => {
         ...(fixture.auditDeadlineMs === undefined
           ? {}
           : { auditDeadlineMs: fixture.auditDeadlineMs }),
+        ...(fixture.writerDeadlineMs === undefined
+          ? {}
+          : { writerDeadlineMs: fixture.writerDeadlineMs }),
       });
       expect(result.status).toBe(
         fixture.expected.status as typeof result.status,
@@ -322,5 +328,313 @@ test("patch escalations are retained with a replayable gate journal", async () =
     outcome: "escalation",
     classifierPolicy: fixture.classifierPolicy,
     executionPolicy: fixture.executionPolicy,
+  });
+});
+
+test("fixture-level audit assignment is stable and depends on the seed", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const run = async (auditSeed: string): Promise<boolean> => {
+    const store = new MemoryStore(fixture.initialMemory);
+    await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: new StubClassifier({
+        relevance: fixture.stubs.relevance,
+        assessments: fixture.stubs.assessments,
+      }),
+      writer: new StubWriter({ proposals: fixture.stubs.proposals }),
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: { ...fixture.executionPolicy, auditSeed },
+    });
+    const audit = store.journal.find((entry) => entry.type === "audit_record");
+    return audit?.type === "audit_record" && audit.sampled;
+  };
+  expect(await run("stable-seed")).toBe(await run("stable-seed"));
+  expect(await run("stable-seed")).not.toBe(await run("different-seed"));
+});
+
+test("protect matches multiline pins and retains complete tool messages", () => {
+  const call = {
+    id: "message-call" as never,
+    role: "assistant" as const,
+    content: "Calling the tool",
+    toolCall: { id: "call-1", name: "write", arguments: { path: "/tmp/a" } },
+  };
+  const resultMessage = {
+    id: "message-result" as never,
+    role: "tool" as const,
+    content: "written",
+    toolResult: { callId: "call-1", isError: false },
+  };
+  const result = protect({
+    id: "chunk-protect" as never,
+    createdAt: "2026-09-18T00:00:00.000Z",
+    messages: [
+      call,
+      resultMessage,
+      {
+        id: "message-pin" as never,
+        role: "user",
+        content: "Preserve this output\nexactly",
+      },
+    ],
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toHaveLength(3);
+  expect(JSON.parse(result.value[0]?.text ?? "null")).toEqual(call);
+  expect(JSON.parse(result.value[1]?.text ?? "null")).toEqual(resultMessage);
+  expect(result.value[2]?.kind).toBe("explicit_pin");
+});
+
+test("malformed runtime classifier output is retained", async () => {
+  const fixture = fixtures.find(({ name }) => name === "transient chatter");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const classifier = {
+    scoreRelevance: async () => ({ topics: "invalid" }),
+    classifyRelationships: async () => ({
+      relations: [],
+      uncovered: { outcome: "none", confidence: 1 },
+    }),
+  } as never;
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier,
+    writer: new StubWriter(),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "active" },
+  });
+  expect(result).toMatchObject({
+    status: "retained",
+    reason: expect.stringContaining("malformed relevance response"),
+  });
+});
+
+test("malformed relationship outcomes cannot authorize a bypass", async () => {
+  const fixture = fixtures.find(({ name }) => name === "transient chatter");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const classifier = {
+    scoreRelevance: async () => ({
+      topics: [{ topicId: fixture.initialMemory.topics[0]?.id, score: 0.9 }],
+    }),
+    classifyRelationships: async () => ({
+      relations: [
+        {
+          topicId: fixture.initialMemory.topics[0]?.id,
+          relationship: "same_info",
+          confidence: 0.99,
+        },
+      ],
+      uncovered: { outcome: "invalid", confidence: 0.99 },
+    }),
+  } as never;
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier,
+    writer: new StubWriter(),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "active" },
+  });
+  expect(result).toMatchObject({
+    status: "retained",
+    reason: expect.stringContaining("malformed relationship response"),
+  });
+  expect(store.commits).toHaveLength(0);
+});
+
+test("synchronous audit writer throws are recorded and do not block bypass", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer: Writer = {
+    propose(): Promise<MemoryPatch> {
+      throw new Error("synchronous failure");
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+  };
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+  });
+  expect(result.status).toBe("no_update");
+  expect(store.journal[0]).toMatchObject({
+    type: "audit_record",
+    outcome: "failed",
+  });
+});
+
+test("malformed writer output reaches the patch gate without dereferencing", async () => {
+  const fixture = fixtures.find(({ name }) => name === "timeout");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer: Writer = {
+    async propose() {
+      return {} as MemoryPatch;
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+  };
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
+  expect(result.status).toBe("retained");
+  expect(store.journal[0]).toMatchObject({
+    type: "gate_decision",
+    gate: "patch",
+  });
+});
+
+test("writer records cannot replace deterministic protections", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "explicit preservation instruction",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const firstMessage = fixture.chunk.messages[0];
+  if (firstMessage === undefined) throw new Error("fixture message missing");
+  const protectedId = `protected-${firstMessage.id}-pin`;
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [],
+          newTopics: [],
+          addProtected: [
+            {
+              id: protectedId as never,
+              kind: "constraint",
+              text: "writer replacement",
+              sources: [{ messageId: firstMessage.id }],
+              status: "active",
+            },
+          ],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
+  expect(result.status).toBe("retained");
+  expect(store.memory.protected).toHaveLength(0);
+  expect(store.journal[0]).toMatchObject({
+    type: "gate_decision",
+    gate: "patch",
+    reason: expect.stringContaining("collides"),
+  });
+});
+
+class FailingJournalStore extends MemoryStore {
+  override async appendJournal(): Promise<Result<void, DomainError>> {
+    return err({
+      code: "storage_error",
+      operation: "appendJournal",
+      message: "journal unavailable",
+    });
+  }
+}
+
+test("journal persistence failures prevent shadow commits", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new FailingJournalStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({ proposals: fixture.stubs.proposals }),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+  });
+  expect(result).toMatchObject({
+    status: "retained",
+    reason: expect.stringContaining("shadow routing journal failed"),
+  });
+  expect(store.commits).toHaveLength(0);
+});
+
+test("gate journal failures are surfaced in the retained reason", async () => {
+  const fixture = fixtures.find(({ name }) => name === "malformed response");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new FailingJournalStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({ relevance: fixture.stubs.relevance }),
+    writer: new StubWriter(),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
+  expect(result).toMatchObject({
+    status: "retained",
+    reason: expect.stringContaining("journal failed: journal unavailable"),
+  });
+});
+
+test("conflicting active and shadow inputs are rejected", async () => {
+  const fixture = fixtures.find(({ name }) => name === "transient chatter");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer: new StubWriter(),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    mode: "active",
+  });
+  expect(result.status).toBe("retained");
+  expect(store.journal[0]).toMatchObject({
+    type: "gate_decision",
+    gate: "configuration",
+    effectiveMode: "active",
+    executionPolicy: { mode: "active" },
+  });
+});
+
+test("baseline gate journals record baseline as the effective mode", async () => {
+  const fixture = fixtures.find(({ name }) => name === "timeout");
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer: new StubWriter({ proposals: [{ error: "failed" }] }),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+    mode: "baseline",
+  });
+  expect(result.status).toBe("retained");
+  expect(store.journal[0]).toMatchObject({
+    type: "gate_decision",
+    gate: "writer",
+    effectiveMode: "baseline",
   });
 });

@@ -35,7 +35,7 @@
   },
   "executionPolicy": {
     "mode": "active",
-    "bypassAuditRate": 1,
+    "bypassAuditRate": 0.5,
     "auditSeed": "stable-seed"
   },
   "stubs": {

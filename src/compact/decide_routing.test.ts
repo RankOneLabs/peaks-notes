@@ -58,3 +58,28 @@ test("confident same info and no uncovered content bypasses", () => {
   );
   expect(result.ok && result.value.kind).toBe("bypass");
 });
+
+test("equal-ranked relations use the lowest confidence regardless of order", () => {
+  const relation = (confidence: number) => ({
+    topicId: "a" as never,
+    relationship: "same_info" as const,
+    confidence,
+  });
+  for (const relations of [
+    [relation(0.9), relation(0.1)],
+    [relation(0.1), relation(0.9)],
+  ]) {
+    const result = decideRouting(
+      selected,
+      {
+        relations,
+        uncovered: { outcome: "none", confidence: 0.9 },
+      },
+      policy,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      value: { kind: "writer", reason: "low_confidence_same_info" },
+    });
+  }
+});

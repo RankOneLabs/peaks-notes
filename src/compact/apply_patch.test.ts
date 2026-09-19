@@ -57,3 +57,40 @@ test("applies existing and new topics atomically without mutating input", () => 
   );
   expect(memory.topics[0]?.summary).toBe("old");
 });
+
+test("default topic ids skip identities already in memory", () => {
+  const occupied = {
+    revision: 1,
+    topics: [
+      {
+        id: "topic-2-1",
+        title: "A",
+        description: "A",
+        version: 1,
+        summary: "A",
+        sources: [],
+        unresolved: [],
+      },
+    ],
+    protected: [],
+    processedChunkIds: [],
+  } as unknown as Memory;
+  const result = applyPatch(occupied, {
+    replacements: [],
+    newTopics: [
+      {
+        title: "B",
+        description: "B",
+        summary: "B",
+        sources: [],
+        unresolved: [],
+      },
+    ],
+    addProtected: [],
+    supersedeProtected: [],
+  });
+  expect(result.topics.map(({ id }) => String(id))).toEqual([
+    "topic-2-1",
+    "topic-2-2",
+  ]);
+});

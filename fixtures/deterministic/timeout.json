@@ -29,12 +29,23 @@
     "bypassAuditRate": 0,
     "auditSeed": "seed"
   },
+  "writerDeadlineMs": 1,
   "stubs": {
     "relevance": [],
     "assessments": [],
-    "proposals": [{ "error": "timeout" }],
+    "proposals": [
+      {
+        "delayMs": 20,
+        "output": {
+          "replacements": [],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
     "compressions": [],
     "comparisons": []
   },
-  "expected": { "status": "retained", "reasonIncludes": "timeout" }
+  "expected": { "status": "retained", "reasonIncludes": "timed out" }
 }

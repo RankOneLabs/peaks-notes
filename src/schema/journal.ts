@@ -111,6 +111,7 @@ export const GateDecisionJournalEntrySchema = JournalBaseSchema.extend({
   type: z.literal("gate_decision"),
   gate: z.enum([
     "protect",
+    "configuration",
     "classifier",
     "relevance",
     "relationship",
@@ -119,6 +120,7 @@ export const GateDecisionJournalEntrySchema = JournalBaseSchema.extend({
   ]),
   outcome: z.enum(["failure", "escalation"]),
   reason: z.string(),
+  effectiveMode: z.enum(["shadow", "active", "baseline"]),
   classifierPolicy: ClassifierPolicySchema,
   executionPolicy: ExecutionPolicySchema,
 }).strict();

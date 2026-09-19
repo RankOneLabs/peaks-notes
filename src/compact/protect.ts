@@ -4,7 +4,7 @@ import { ok } from "../schema";
 export type ProtectionError = { code: "protection_error"; message: string };
 
 const explicitPin =
-  /\b(?:preserve|remember|keep)\b.*\b(?:exactly|verbatim|unchanged)\b/i;
+  /\b(?:preserve|remember|keep)\b.*\b(?:exactly|verbatim|unchanged)\b/is;
 
 export const protect = (
   chunk: Chunk,
@@ -15,7 +15,7 @@ export const protect = (
       records.push({
         id: `protected-${message.id}-call` as ProtectedRecord["id"],
         kind: "action_receipt",
-        text: `${message.toolCall.name} ${JSON.stringify(message.toolCall.arguments)}`,
+        text: JSON.stringify(message),
         sources: [{ messageId: message.id }],
         status: "active",
       });
@@ -23,7 +23,7 @@ export const protect = (
       records.push({
         id: `protected-${message.id}-result` as ProtectedRecord["id"],
         kind: "action_receipt",
-        text: message.content,
+        text: JSON.stringify(message),
         sources: [{ messageId: message.id }],
         status: "active",
       });

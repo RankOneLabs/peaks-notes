@@ -103,3 +103,42 @@ test("attempts unchanged compression once then returns budget_exceeded without m
   expect(writer.compressCalls).toHaveLength(1);
   expect(memory).toEqual(before);
 });
+
+test("rejects compression that removes an unresolved conflict", async () => {
+  const writer = new StubWriter({
+    compressions: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network",
+              summary: "x",
+              sources: [{ messageId: "source-1" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
+  const tokenizer: Tokenizer = {
+    count: (text) => ({
+      tokens: text.includes("LAN only") ? 100 : 1,
+      method: "target_tokenizer",
+    }),
+  };
+  const result = await renderContext(
+    memory,
+    [],
+    { maxTokens: 50, warningThreshold: 0.8 },
+    { writer, tokenizer },
+  );
+  expect(result.status).toBe("budget_exceeded");
+  expect(writer.compressCalls).toHaveLength(1);
+});
