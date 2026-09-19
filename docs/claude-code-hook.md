@@ -27,7 +27,8 @@ project's `.claude/settings.json` to cover only that project:
 ```
 
 Put the model configuration from the README's configuration table in `.env` at
-the peaks checkout root. The worker runs from there, so Bun loads that file;
+the Peaks checkout root. The worker explicitly loads that file, overriding any
+stale model settings inherited from the host project or Claude process;
 it is gitignored. Raise `WRITER_DEADLINE_MS` well above its 30,000 default:
 the worker runs in the background, where a slow turn costs nothing, and a
 writer timeout leaves the turn unsummarized until the next one. A run against

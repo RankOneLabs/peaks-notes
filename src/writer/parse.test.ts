@@ -23,6 +23,27 @@ test("parses an exact MemoryPatch JSON object", () => {
   });
 });
 
+test("drops untrusted source offsets from writer output", () => {
+  const patch = parseMemoryPatch(
+    JSON.stringify({
+      replacements: [],
+      newTopics: [
+        {
+          title: "Topic",
+          description: "Description",
+          summary: "Summary",
+          sources: [{ messageId: "m1", start: 0, end: 999 }],
+          unresolved: [],
+        },
+      ],
+      addProtected: [],
+      supersedeProtected: [],
+    }),
+  );
+
+  expect(patch.newTopics[0]?.sources).toEqual([{ messageId: "m1" as never }]);
+});
+
 test("rejects malformed JSON and non-patch output", () => {
   expect(() => parseMemoryPatch("not json")).toThrow("not valid JSON");
   expect(() => parseMemoryPatch("{}")).toThrow("not a MemoryPatch");
