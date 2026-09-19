@@ -104,6 +104,30 @@ const OpenAIResponseSchema = z
   })
   .passthrough();
 
+/** OpenRouter chat completions; `usage` is always present on non-streaming responses. */
+const OpenRouterResponseSchema = z
+  .object({
+    model: z.string().min(1).optional(),
+    usage: z
+      .object({
+        prompt_tokens: z.number().int().nonnegative(),
+        completion_tokens: z.number().int().nonnegative(),
+      })
+      .passthrough(),
+    choices: z
+      .array(
+        z
+          .object({
+            message: z
+              .object({ content: z.string().nullable().optional() })
+              .passthrough(),
+          })
+          .passthrough(),
+      )
+      .min(1),
+  })
+  .passthrough();
+
 const AnthropicResponseSchema = z
   .object({
     model: z.string().min(1).optional(),
@@ -217,6 +241,66 @@ export const createProvider = (
                   request.responseContract.schema,
                 ),
           usage: usage(inputTokens, outputTokens),
+          model: body.model ?? request.model,
+        };
+      },
+    };
+  }
+  if (config.provider === "openrouter") {
+    return {
+      id: "openrouter",
+      async generate(request) {
+        const raw = await withAbortDeadline(request, async (signal) => {
+          const response = await fetchImplementation(
+            config.endpoint ?? "https://openrouter.ai/api/v1/chat/completions",
+            {
+              method: "POST",
+              signal,
+              headers: {
+                Authorization: `Bearer ${config.apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: request.model,
+                messages: [
+                  { role: "system", content: request.system },
+                  { role: "user", content: request.user },
+                ],
+                response_format:
+                  request.responseContract === undefined
+                    ? { type: "json_object" }
+                    : {
+                        type: "json_schema",
+                        json_schema: {
+                          name: request.responseContract.name,
+                          strict: true,
+                          schema: openAIStrictResponseSchema(
+                            request.responseContract.schema,
+                          ),
+                        },
+                      },
+                // Route only to endpoints that honor response_format.
+                provider: { require_parameters: true },
+              }),
+            },
+          );
+          if (!response.ok)
+            throw new Error(`OpenRouter HTTP ${response.status}`);
+          return readJson(response);
+        });
+        const body = OpenRouterResponseSchema.parse(raw);
+        const text = body.choices[0]?.message.content;
+        if (typeof text !== "string")
+          throw new Error("OpenRouter response omitted message content");
+        return {
+          text:
+            request.responseContract === undefined
+              ? text
+              : normalizeOpenAIStrictResponse(
+                  text,
+                  request.responseContract.schema,
+                ),
+          usage: usage(body.usage.prompt_tokens, body.usage.completion_tokens),
           model: body.model ?? request.model,
         };
       },

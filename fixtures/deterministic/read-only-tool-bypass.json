@@ -1,0 +1,74 @@
+{
+  "name": "read-only tool bypass",
+  "description": "Host metadata marks a read-only tool, so nothing is protected and a confident classifier can bypass the writer.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "LAN only.",
+        "sources": [{ "messageId": "message-old" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-read-only",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-read-call",
+        "role": "assistant",
+        "content": "Reading the changelog.",
+        "toolCall": {
+          "id": "call-read",
+          "name": "Read",
+          "arguments": { "file_path": "/repo/CHANGELOG.md" },
+          "action": { "effect": "read_only" }
+        }
+      },
+      {
+        "id": "message-read-result",
+        "role": "tool",
+        "content": "# Changelog\n\nNo unreleased changes.",
+        "toolResult": { "callId": "call-read" }
+      }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Configure network",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.1 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [],
+          "uncovered": { "outcome": "transient", "confidence": 0.99 }
+        }
+      }
+    ],
+    "proposals": [],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "no_update", "revision": 1, "auditSampled": false }
+}

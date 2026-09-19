@@ -82,6 +82,12 @@
         "protectedContent": ["receipt"]
       },
       {
+        "file": "fixtures/deterministic/read-only-tool-bypass.json",
+        "chunkId": "chunk-read-only",
+        "requiredCases": ["read_only_tool"],
+        "requiresUpdate": false
+      },
+      {
         "file": "fixtures/deterministic/timeout.json",
         "chunkId": "chunk-timeout",
         "requiredCases": ["malformed_timeout_overlong"],
@@ -237,6 +243,7 @@
     "transient_chatter",
     "equal_length_tool_output_change",
     "state_changing_receipt",
+    "read_only_tool",
     "explicit_preservation",
     "replayed_chunk",
     "malformed_timeout_overlong",

@@ -3,7 +3,7 @@
 These are explicit precedents for reviewer confirmation or amendment before later cohorts build behavior on them.
 
 - **Toolchain:** Use one strict TypeScript package on Bun, with `bun:sqlite`, `bun test`, Zod validation, and Biome formatting/linting. This follows the sibling-project precedent and keeps the MVP small.
-- **Tracked specification:** Keep the v0.4 source of truth at `docs/topic-compactor-spec.md`, while `comms/` remains ignored as scratch space. Versioned types can therefore cite their source sections.
+- **Tracked specification:** Keep the v0.5 source of truth at `docs/topic-compactor-spec.md`, while `comms/` remains ignored as scratch space. Versioned types can therefore cite their source sections.
 - **Jev notes:** Keep verified provider facts and their documentation sources in `docs/jev-adapter.md`. Provider wire formats stay outside the core contracts.
 - **Topic identity:** Assign opaque `TopicId` values in code; never derive them from titles, and treat §9 identifiers as fixture labels. Titles can change or collide without changing identity.
 - **Journal model:** Define `JournalEntry` as a discriminated union, with `audit_record` and `semantic_comparison` distinct from `committed_update`. Evaluation-only records cannot be mistaken for commits.

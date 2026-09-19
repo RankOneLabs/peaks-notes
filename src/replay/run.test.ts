@@ -11,7 +11,7 @@ test("stub replay runs deterministic fixtures without protected or critical loss
     fixtures: "fixtures/deterministic",
     adapters: "stub",
   });
-  expect(result.fixtures).toHaveLength(15);
+  expect(result.fixtures).toHaveLength(16);
   expect(result.metrics.protectedContentLosses).toBe(0);
   expect(result.metrics.missedCriticalUpdates).toBe(0);
 });

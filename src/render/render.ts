@@ -2,7 +2,6 @@ import { applyPatch } from "../compact/apply_patch";
 import { validateCompressionPatch } from "../compact/validate_patch";
 import type {
   Memory,
-  Message,
   RenderResult,
   TaskContext,
   TokenBudget,
@@ -10,36 +9,17 @@ import type {
   Writer,
 } from "../schema";
 import { budgetResult } from "./budget";
-import { assembleContext, type RawContext } from "./context";
+import { assembleSummary } from "./context";
 import { ConservativeTokenizer } from "./estimate_tokens";
 
 export const DEFAULT_SUMMARY_TOKEN_BUDGET = 4_000;
 export const DEFAULT_WARNING_THRESHOLD = 0.8;
-
-export type RecentRaw =
-  | readonly Message[]
-  | { messages: readonly Message[]; retainedFailures?: readonly Message[] };
 
 export type RenderOptions = {
   taskContext?: TaskContext;
   tokenizer?: Tokenizer;
   writer?: Writer;
   summaryBudgetTokens?: number;
-  recentMessageCount?: number;
-};
-
-const collectRecent = (recentRaw: RecentRaw, count?: number): RawContext => {
-  const isCollection = (value: RecentRaw): value is readonly Message[] =>
-    Array.isArray(value);
-  const messages = isCollection(recentRaw) ? recentRaw : recentRaw.messages;
-  const retained = isCollection(recentRaw)
-    ? []
-    : (recentRaw.retainedFailures ?? []);
-  return {
-    messages,
-    retainedFailures: retained,
-    ...(count === undefined ? {} : { recentMessageCount: count }),
-  };
 };
 
 const compressedMemory = async (
@@ -60,9 +40,9 @@ const compressedMemory = async (
   return applyPatch(memory, candidate.value);
 };
 
-export const renderContext = async (
+/** Spec §6: render committed memory as the conversation summary. */
+export const renderSummary = async (
   memory: Memory,
-  recentRaw: RecentRaw,
   budget: TokenBudget,
   options: RenderOptions = {},
 ): Promise<RenderResult> => {
@@ -73,8 +53,7 @@ export const renderContext = async (
   };
   const summaryBudget =
     options.summaryBudgetTokens ?? DEFAULT_SUMMARY_TOKEN_BUDGET;
-  const recent = collectRecent(recentRaw, options.recentMessageCount);
-  const first = assembleContext(memory, recent, taskContext, tokenizer);
+  const first = assembleSummary(memory, tokenizer);
   const warning =
     first.summaryTokens >
     summaryBudget * (budget.warningThreshold ?? DEFAULT_WARNING_THRESHOLD);
@@ -94,7 +73,7 @@ export const renderContext = async (
     return firstResult;
   }
   if (compressed === undefined) return firstResult;
-  const second = assembleContext(compressed, recent, taskContext, tokenizer);
+  const second = assembleSummary(compressed, tokenizer);
   const secondWarning =
     second.summaryTokens >
     summaryBudget * (budget.warningThreshold ?? DEFAULT_WARNING_THRESHOLD);

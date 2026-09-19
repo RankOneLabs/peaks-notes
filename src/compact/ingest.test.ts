@@ -93,6 +93,7 @@ describe("deterministic fixtures", () => {
         "malformed response",
         "no-match with useful content",
         "overlong input",
+        "read-only tool bypass",
         "replayed chunk",
         "same-seed audit assignment",
         "state-changing receipt",
@@ -124,7 +125,6 @@ describe("deterministic fixtures", () => {
           maxTokens: fixture.budget?.maxTokens ?? 100_000,
           summaryBudgetTokens: fixture.budget?.summaryBudgetTokens ?? 4_000,
           tokenizer: new ConservativeTokenizer(),
-          rawMessages: [],
         },
         ...(fixture.auditDeadlineMs === undefined
           ? {}
@@ -1105,6 +1105,85 @@ test("protect matches multiline pins and retains complete tool messages", () => 
   expect(result.value[2]?.kind).toBe("explicit_pin");
 });
 
+const toolChunk = (action: unknown) =>
+  ({
+    id: "chunk-tool" as never,
+    createdAt: "2026-09-18T00:00:00.000Z",
+    messages: [
+      {
+        id: "message-call" as never,
+        role: "assistant" as const,
+        content: "Writing the file",
+        toolCall: {
+          id: "call-1",
+          name: "Write",
+          arguments: { file_path: "/tmp/a", content: "x".repeat(10_000) },
+          action,
+        },
+      },
+      {
+        id: "message-result" as never,
+        role: "tool" as const,
+        content: "y".repeat(10_000),
+        toolResult: { callId: "call-1", isError: false },
+      },
+    ],
+  }) as never;
+
+test("protect omits read-only tool records", () => {
+  expect(protect(toolChunk({ effect: "read_only" }))).toEqual({
+    ok: true,
+    value: [],
+  });
+});
+
+test("protect reduces a state-changing tool to its declared receipt", () => {
+  const result = protect(
+    toolChunk({ effect: "state_changing", receiptArguments: ["file_path"] }),
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toHaveLength(1);
+  expect(result.value[0]).toMatchObject({
+    id: "protected-message-call-receipt",
+    kind: "action_receipt",
+    sources: [{ messageId: "message-call" }, { messageId: "message-result" }],
+    status: "active",
+  });
+  expect(JSON.parse(result.value[0]?.text ?? "null")).toEqual({
+    tool: "Write",
+    arguments: { file_path: "/tmp/a" },
+    isError: false,
+  });
+});
+
+test("a state-changing receipt records an unreported outcome as no error", () => {
+  const chunk = toolChunk({
+    effect: "state_changing",
+    receiptArguments: ["file_path"],
+  }) as { messages: { toolResult?: { isError?: boolean } }[] };
+  delete chunk.messages[1]?.toolResult?.isError;
+
+  const result = protect(chunk as never);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.value[0]?.text ?? "null")).toEqual({
+    tool: "Write",
+    arguments: { file_path: "/tmp/a" },
+    isError: false,
+  });
+});
+
+test("a state-changing receipt keeps every argument by default", () => {
+  const result = protect(toolChunk({ effect: "state_changing" }));
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.value[0]?.text ?? "null").arguments).toEqual({
+    file_path: "/tmp/a",
+    content: "x".repeat(10_000),
+  });
+});
+
 test("malformed runtime classifier output is retained", async () => {
   const fixture = fixtures.find(({ name }) => name === "transient chatter");
   if (fixture === undefined) throw new Error("fixture missing");
@@ -1573,7 +1652,6 @@ const budget = {
   maxTokens: 1_000,
   summaryBudgetTokens: 10,
   tokenizer: longTokenizer,
-  rawMessages: [],
 };
 const replaceNetwork = (summary: string, expectedVersion = 1) =>
   JSON.stringify({

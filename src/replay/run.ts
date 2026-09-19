@@ -207,10 +207,6 @@ const runFixture = async (
       maxTokens: fixture.budget?.maxTokens ?? 100_000,
       summaryBudgetTokens: fixture.budget?.summaryBudgetTokens ?? 4_000,
       tokenizer: new ConservativeTokenizer(),
-      rawMessages: [],
-      ...(fixture.budget?.recentMessageCount === undefined
-        ? {}
-        : { recentMessageCount: fixture.budget.recentMessageCount }),
     },
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(auditDeadlineMs === undefined ? {} : { auditDeadlineMs }),

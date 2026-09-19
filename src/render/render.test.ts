@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import type { Memory, Message, Tokenizer } from "../schema";
+import type { Memory, Tokenizer } from "../schema";
 import { StubWriter } from "../writer/stub";
-import { renderContext } from "./render";
+import { renderSummary } from "./render";
 import { SECTION_HEADINGS } from "./sections";
 
 const memory: Memory = {
@@ -28,29 +28,36 @@ const memory: Memory = {
   ],
   processedChunkIds: [],
 };
-const recent: Message[] = [
-  { id: "recent-1" as never, role: "user", content: "Continue." },
-];
-
 test("renders sections in specification order and counts the whole output", async () => {
-  const result = await renderContext(
-    memory,
-    recent,
-    { maxTokens: 10_000, warningThreshold: 0.8 },
-    {
-      taskContext: {
-        currentTask: "Configure",
-        compactionInstructions: ["Be exact"],
-      },
-    },
-  );
+  const result = await renderSummary(memory, {
+    maxTokens: 10_000,
+    warningThreshold: 0.8,
+  });
   expect(result.status).toBe("rendered");
   if (result.status !== "rendered") return;
   const positions = Object.values(SECTION_HEADINGS).map((heading) =>
     result.content.indexOf(heading),
   );
+  expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].sort((a, b) => a - b));
   expect(result.content).toContain("Never use the public internet.");
+});
+
+test("renders only committed memory, never task context", async () => {
+  const result = await renderSummary(
+    memory,
+    { maxTokens: 10_000, warningThreshold: 0.8 },
+    {
+      taskContext: {
+        currentTask: "Configure the router",
+        compactionInstructions: ["Keep device addresses exact"],
+      },
+    },
+  );
+  expect(result.status).toBe("rendered");
+  if (result.status !== "rendered") return;
+  expect(result.content).not.toContain("Configure the router");
+  expect(result.content).not.toContain("Keep device addresses exact");
 });
 
 test("sets warning above 80 percent of summary budget", async () => {
@@ -60,9 +67,8 @@ test("sets warning above 80 percent of summary budget", async () => {
       method: "target_tokenizer",
     }),
   };
-  const result = await renderContext(
+  const result = await renderSummary(
     memory,
-    [],
     { maxTokens: 1000, warningThreshold: 0.8 },
     { tokenizer, summaryBudgetTokens: 100 },
   );
@@ -93,9 +99,8 @@ test("attempts unchanged compression once then returns budget_exceeded without m
       },
     ],
   });
-  const result = await renderContext(
+  const result = await renderSummary(
     memory,
-    recent,
     { maxTokens: 1, warningThreshold: 0.8 },
     { writer },
   );
@@ -133,9 +138,8 @@ test("rejects compression that removes an unresolved conflict", async () => {
       method: "target_tokenizer",
     }),
   };
-  const result = await renderContext(
+  const result = await renderSummary(
     memory,
-    [],
     { maxTokens: 50, warningThreshold: 0.8 },
     { writer, tokenizer },
   );

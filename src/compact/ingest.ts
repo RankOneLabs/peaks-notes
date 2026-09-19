@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { assembleContext } from "../render/context";
+import { assembleSummary } from "../render/context";
 import type {
   Assessment,
   Chunk,
@@ -16,7 +16,6 @@ import type {
   JournalEntryId,
   Memory,
   MemoryPatch,
-  Message,
   ModelIdentifier,
   RelevanceResult,
   Result,
@@ -216,20 +215,17 @@ export type IngestDependencies = {
   /** Evaluation-only budget for comparing an authoritative shadow patch. */
   shadowComparisonDeadlineMs?: number;
   writerDeadlineMs?: number;
-  /** Host context remaining after this commit; raw messages must include retained failures. */
-  /** Required by production callers. Optional only for backward-compatible test harnesses. */
+  /** Rendered-summary budget. Required by production callers; optional only for test harnesses. */
   budget?: IngestBudgetContext;
   /** Test/replay hook. Production attempts use opaque UUIDs. */
   attemptIdFactory?: () => string;
 };
 
+/** Spec §6: `maxTokens` bounds the whole rendered summary; `summaryBudgetTokens` its topic section. */
 export type IngestBudgetContext = {
   maxTokens: number;
   summaryBudgetTokens: number;
   tokenizer: Tokenizer;
-  rawMessages: readonly Message[];
-  retainedFailures?: readonly Message[];
-  recentMessageCount?: number;
   compressionDeadlineMs?: number;
 };
 
@@ -947,17 +943,8 @@ const prepareWithinBudget = async (
       reason: "invalid ingest budget context",
     };
   }
-  const raw = {
-    messages: budget.rawMessages,
-    ...(budget.retainedFailures === undefined
-      ? {}
-      : { retainedFailures: budget.retainedFailures }),
-    ...(budget.recentMessageCount === undefined
-      ? {}
-      : { recentMessageCount: budget.recentMessageCount }),
-  };
   const candidate = applyPatch(before, proposal);
-  const first = assembleContext(candidate, raw, taskContext, budget.tokenizer);
+  const first = assembleSummary(candidate, budget.tokenizer);
   if (
     first.totalTokens <= budget.maxTokens &&
     first.summaryTokens <= budget.summaryBudgetTokens
@@ -968,7 +955,7 @@ const prepareWithinBudget = async (
       patch: proposal,
     };
   }
-  if (first.nonSummaryTokens >= budget.maxTokens) {
+  if (first.protectedTokens >= budget.maxTokens) {
     return {
       status: "budget_exceeded",
       required: first.totalTokens,
@@ -976,7 +963,7 @@ const prepareWithinBudget = async (
   }
   const target = Math.min(
     budget.summaryBudgetTokens,
-    budget.maxTokens - first.nonSummaryTokens,
+    budget.maxTokens - first.protectedTokens,
   );
   if (target <= 0)
     return {
@@ -1031,12 +1018,7 @@ const prepareWithinBudget = async (
       compression: { call, status: "failed" },
     };
   const compressedCandidate = applyPatch(candidate, valid.value);
-  const second = assembleContext(
-    compressedCandidate,
-    raw,
-    taskContext,
-    budget.tokenizer,
-  );
+  const second = assembleSummary(compressedCandidate, budget.tokenizer);
   if (
     second.totalTokens > budget.maxTokens ||
     second.summaryTokens > budget.summaryBudgetTokens
