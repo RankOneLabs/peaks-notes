@@ -1,0 +1,108 @@
+{
+  "name": "active sampled bypass with substantive patch",
+  "description": "An active bypass audit discovers a source-supported required update without committing it.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "Guest LAN disabled.",
+        "sources": [{ "messageId": "old-active-audit" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-active-substantive",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-active-substantive",
+        "role": "user",
+        "content": "Correction: the guest LAN is enabled for contractors."
+      }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Configure network",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 1,
+    "auditSeed": "substantive-audit"
+  },
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.99 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-1",
+              "relationship": "same_info",
+              "confidence": 0.99
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.99 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Network",
+              "description": "Network facts",
+              "summary": "Guest LAN enabled for contractors.",
+              "sources": [{ "messageId": "message-active-substantive" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": [
+      {
+        "output": {
+          "verdict": "material_change",
+          "changes": [
+            {
+              "kind": "correction",
+              "before": "Guest LAN disabled.",
+              "after": "Guest LAN enabled for contractors.",
+              "sources": [{ "messageId": "message-active-substantive" }],
+              "assessment": "required_update",
+              "reason": "The user explicitly corrected the current network state."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expected": {
+    "status": "no_update",
+    "revision": 1,
+    "auditSampled": true,
+    "auditOutcome": "patch"
+  }
+}

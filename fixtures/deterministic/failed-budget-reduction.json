@@ -1,0 +1,97 @@
+{
+  "name": "failed budget reduction",
+  "description": "Unchanged compression remains a typed budget_exceeded render.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Large",
+        "description": "Large summary",
+        "version": 1,
+        "summary": "This summary deliberately remains unchanged after compression.",
+        "sources": [{ "messageId": "message-large" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [
+      {
+        "id": "protected-1",
+        "kind": "constraint",
+        "text": "Never drop this protected constraint.",
+        "sources": [{ "messageId": "message-large" }],
+        "status": "active"
+      }
+    ],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-budget",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-large",
+        "role": "user",
+        "content": "Large retained input."
+      }
+    ]
+  },
+  "taskContext": { "currentTask": "Render", "compactionInstructions": [] },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "shadow",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "budget": { "maxTokens": 1000, "summaryBudgetTokens": 5 },
+  "stubs": {
+    "relevance": [],
+    "assessments": [],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Large",
+              "description": "Large summary",
+              "summary": "This proposed summary deliberately remains far above the configured summary budget after compression.",
+              "sources": [{ "messageId": "message-large" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 2,
+              "title": "Large",
+              "description": "Large summary",
+              "summary": "This proposed summary deliberately remains far above the configured summary budget after compression.",
+              "sources": [{ "messageId": "message-large" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "comparisons": []
+  },
+  "expected": { "status": "budget_exceeded" }
+}

@@ -1,0 +1,103 @@
+{
+  "name": "held-out equal-length tool output change",
+  "description": "Equal-length tool outputs with different critical content are assessed and preserved verbatim.",
+  "initialMemory": {
+    "revision": 0,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Deploy status",
+        "description": "Latest deployment check",
+        "version": 1,
+        "summary": "The deployment check returned PASSED.",
+        "sources": [{ "messageId": "message-held-old-result" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [
+      {
+        "id": "protected-message-held-old-result-result",
+        "kind": "action_receipt",
+        "text": "{\"id\":\"message-held-old-result\",\"role\":\"tool\",\"content\":\"PASSED\",\"toolResult\":{\"callId\":\"call-held\",\"isError\":false}}",
+        "sources": [{ "messageId": "message-held-old-result" }],
+        "status": "active"
+      }
+    ],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-held-tool-output",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-held-call",
+        "role": "assistant",
+        "content": "Check state",
+        "toolCall": {
+          "id": "call-held",
+          "name": "deploy_status",
+          "arguments": { "service": "api" }
+        }
+      },
+      {
+        "id": "message-held-result",
+        "role": "tool",
+        "content": "FAILED",
+        "toolResult": { "callId": "call-held", "isError": true }
+      }
+    ]
+  },
+  "taskContext": { "currentTask": "Deploy", "compactionInstructions": [] },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "shadow",
+    "bypassAuditRate": 0,
+    "auditSeed": "held"
+  },
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.99 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-1",
+              "relationship": "changing_info",
+              "confidence": 0.99
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.99 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-1",
+              "expectedVersion": 1,
+              "title": "Deploy status",
+              "description": "Latest deployment check",
+              "summary": "The deployment check returned FAILED.",
+              "sources": [{ "messageId": "message-held-result" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 1 }
+}
