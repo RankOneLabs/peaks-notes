@@ -3,7 +3,8 @@ import { ok } from "../schema";
 
 export type ProtectionError = { code: "protection_error"; message: string };
 
-const explicitPin = /\b(?:preserve|remember|keep)\b.*\b(?:exactly|verbatim|unchanged)\b/i;
+const explicitPin =
+  /\b(?:preserve|remember|keep)\b.*\b(?:exactly|verbatim|unchanged)\b/i;
 
 export const protect = (
   chunk: Chunk,

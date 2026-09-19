@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
+import { StubClassifier } from "../classifier/stub";
+import { StubEvaluator } from "../evaluator/stub";
+import { renderContext } from "../render/render";
+import { DeterministicFixtureSchema } from "../replay/fixture";
 import type {
   Commit,
   DomainError,
@@ -10,10 +14,6 @@ import type {
   TopicId,
 } from "../schema";
 import { ok } from "../schema";
-import { StubClassifier } from "../classifier/stub";
-import { StubEvaluator } from "../evaluator/stub";
-import { DeterministicFixtureSchema } from "../replay/fixture";
-import { renderContext } from "../render/render";
 import type { CommitResult, Store } from "../store/store";
 import { StubWriter } from "../writer/stub";
 import { ingest } from "./ingest";
@@ -21,6 +21,7 @@ import { ingest } from "./ingest";
 class MemoryStore implements Store {
   memory: Memory;
   readonly journal: EvaluationJournalEntry[] = [];
+  readonly commits: Commit[] = [];
 
   constructor(memory: Memory) {
     this.memory = structuredClone(memory);
@@ -34,21 +35,30 @@ class MemoryStore implements Store {
     return ok(structuredClone(this.memory));
   }
 
-  async commit(_expectedRevision: number, change: Commit): Promise<Result<CommitResult, DomainError>> {
+  async commit(
+    _expectedRevision: number,
+    change: Commit,
+  ): Promise<Result<CommitResult, DomainError>> {
     if (this.memory.processedChunkIds.includes(change.chunkId)) {
       return ok({ status: "replayed", revision: this.memory.revision });
     }
-    if (change.type === "committed_update") this.memory = structuredClone(change.memory);
+    this.commits.push(structuredClone(change));
+    if (change.type === "committed_update")
+      this.memory = structuredClone(change.memory);
     else this.memory.processedChunkIds.push(change.chunkId);
     return ok({ status: "committed", revision: this.memory.revision });
   }
 
-  async appendJournal(entry: EvaluationJournalEntry): Promise<Result<void, DomainError>> {
+  async appendJournal(
+    entry: EvaluationJournalEntry,
+  ): Promise<Result<void, DomainError>> {
     this.journal.push(structuredClone(entry));
     return ok(undefined);
   }
 
-  async recoverTopicVersions(_topicId: TopicId): Promise<Result<Topic[], DomainError>> {
+  async recoverTopicVersions(
+    _topicId: TopicId,
+  ): Promise<Result<Topic[], DomainError>> {
     return ok([]);
   }
 }
@@ -64,28 +74,33 @@ const fixtures = readdirSync("fixtures/deterministic")
 
 describe("deterministic fixtures", () => {
   test("the complete named fixture set is present", () => {
-    expect(fixtures.map(({ name }) => name).sort()).toEqual([
-      "audit timeout",
-      "classifier failure in shadow",
-      "existing plus new topic in one transaction",
-      "explicit preservation instruction",
-      "failed budget reduction",
-      "low-confidence same-info",
-      "malformed response",
-      "no-match with useful content",
-      "overlong input",
-      "replayed chunk",
-      "same-seed audit assignment",
-      "state-changing receipt",
-      "timeout",
-      "transient chatter",
-      "two-topic chunk",
-    ].sort());
+    expect(fixtures.map(({ name }) => name).sort()).toEqual(
+      [
+        "audit timeout",
+        "classifier failure in shadow",
+        "existing plus new topic in one transaction",
+        "explicit preservation instruction",
+        "failed budget reduction",
+        "low-confidence same-info",
+        "malformed response",
+        "no-match with useful content",
+        "overlong input",
+        "replayed chunk",
+        "same-seed audit assignment",
+        "state-changing receipt",
+        "timeout",
+        "transient chatter",
+        "two-topic chunk",
+      ].sort(),
+    );
   });
 
   for (const fixture of fixtures) {
     test(fixture.name, async () => {
-      const writer = new StubWriter({ proposals: fixture.stubs.proposals, compressions: fixture.stubs.compressions });
+      const writer = new StubWriter({
+        proposals: fixture.stubs.proposals,
+        compressions: fixture.stubs.compressions,
+      });
       if (fixture.expected.status === "budget_exceeded") {
         const result = await renderContext(
           fixture.initialMemory,
@@ -99,34 +114,89 @@ describe("deterministic fixtures", () => {
       const store = new MemoryStore(fixture.initialMemory);
       const result = await ingest(fixture.chunk, fixture.taskContext, {
         store,
-        classifier: new StubClassifier({ relevance: fixture.stubs.relevance, assessments: fixture.stubs.assessments }),
+        classifier: new StubClassifier({
+          relevance: fixture.stubs.relevance,
+          assessments: fixture.stubs.assessments,
+        }),
         writer,
         evaluator: new StubEvaluator(fixture.stubs.comparisons),
         classifierPolicy: fixture.classifierPolicy,
         executionPolicy: fixture.executionPolicy,
-        ...(fixture.auditDeadlineMs === undefined ? {} : { auditDeadlineMs: fixture.auditDeadlineMs }),
+        ...(fixture.auditDeadlineMs === undefined
+          ? {}
+          : { auditDeadlineMs: fixture.auditDeadlineMs }),
       });
-      expect(result.status).toBe(fixture.expected.status as typeof result.status);
-      if ("revision" in result && fixture.expected.revision !== undefined) expect(result.revision).toBe(fixture.expected.revision);
+      expect(result.status).toBe(
+        fixture.expected.status as typeof result.status,
+      );
+      if ("revision" in result && fixture.expected.revision !== undefined)
+        expect(result.revision).toBe(fixture.expected.revision);
       if (fixture.expected.reasonIncludes !== undefined) {
-        expect("reason" in result ? result.reason : "").toContain(fixture.expected.reasonIncludes);
+        expect("reason" in result ? result.reason : "").toContain(
+          fixture.expected.reasonIncludes,
+        );
+      }
+      if (fixture.expected.status === "retained") {
+        expect(store.journal.at(-1)).toMatchObject({
+          type: "gate_decision",
+          classifierPolicy: fixture.classifierPolicy,
+          executionPolicy: fixture.executionPolicy,
+        });
       }
       if (fixture.expected.auditSampled !== undefined) {
-        const audit = store.journal.find((entry) => entry.type === "audit_record");
-        expect(audit?.type === "audit_record" && audit.sampled).toBe(fixture.expected.auditSampled);
+        const audit = store.journal.find(
+          (entry) => entry.type === "audit_record",
+        );
+        expect(audit?.type === "audit_record" && audit.sampled).toBe(
+          fixture.expected.auditSampled,
+        );
+      }
+      if (fixture.expected.auditOutcome !== undefined) {
+        const audit = store.journal.find(
+          (entry) => entry.type === "audit_record",
+        );
+        expect(audit?.type === "audit_record" ? audit.outcome : undefined).toBe(
+          fixture.expected.auditOutcome,
+        );
       }
     });
   }
 });
 
 test("shadow commits a writer patch despite a confident same-info decision", async () => {
-  const fixture = fixtures.find(({ name }) => name === "same-seed audit assignment");
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
   if (fixture === undefined) throw new Error("fixture missing");
   const store = new MemoryStore(fixture.initialMemory);
-  const writer = new StubWriter({ proposals: [{ output: { replacements: [{ topicId: "topic-1" as never, expectedVersion: 1, title: "Network", description: "Network facts", summary: "LAN only, confirmed.", sources: [{ messageId: "message-same" as never }], unresolved: [] }], newTopics: [], addProtected: [], supersedeProtected: [] } }] });
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network facts",
+              summary: "LAN only, confirmed.",
+              sources: [{ messageId: "message-same" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
   const result = await ingest(fixture.chunk, fixture.taskContext, {
     store,
-    classifier: new StubClassifier({ relevance: fixture.stubs.relevance, assessments: fixture.stubs.assessments }),
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
     writer,
     classifierPolicy: fixture.classifierPolicy,
     executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
@@ -142,18 +212,115 @@ test("shadow commits a writer patch despite a confident same-info decision", asy
 });
 
 test("active full-rate audit journals but never applies its patch", async () => {
-  const fixture = fixtures.find(({ name }) => name === "same-seed audit assignment");
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
   if (fixture === undefined) throw new Error("fixture missing");
   const store = new MemoryStore(fixture.initialMemory);
-  const writer = new StubWriter({ proposals: [{ output: { replacements: [{ topicId: "topic-1" as never, expectedVersion: 1, title: "Network", description: "Network facts", summary: "audit-only change", sources: [{ messageId: "message-same" as never }], unresolved: [] }], newTopics: [], addProtected: [], supersedeProtected: [] } }] });
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network facts",
+              summary: "audit-only change",
+              sources: [{ messageId: "message-same" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
   const result = await ingest(fixture.chunk, fixture.taskContext, {
     store,
-    classifier: new StubClassifier({ relevance: fixture.stubs.relevance, assessments: fixture.stubs.assessments }),
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
     writer,
     classifierPolicy: fixture.classifierPolicy,
     executionPolicy: fixture.executionPolicy,
   });
   expect(result).toMatchObject({ status: "no_update", revision: 1 });
   expect(store.memory.topics[0]?.summary).toBe("LAN only.");
-  expect(store.journal[0]).toMatchObject({ type: "audit_record", outcome: "patch" });
+  expect(store.journal[0]).toMatchObject({
+    type: "audit_record",
+    outcome: "patch",
+  });
+});
+
+test("writer-path commits retain their routing reason", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "low-confidence same-info",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({ proposals: fixture.stubs.proposals }),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
+  expect(store.commits[0]?.journalEntry).toMatchObject({
+    reason: "low_confidence_same_info; writer returned empty patch",
+  });
+});
+
+test("patch escalations are retained with a replayable gate journal", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "low-confidence same-info",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({
+      proposals: [
+        {
+          output: {
+            replacements: [
+              {
+                topicId: "topic-1" as never,
+                expectedVersion: 1,
+                title: "Network",
+                description: "Network facts",
+                summary: "Invalid source.",
+                sources: [{ messageId: "message-unknown" as never }],
+                unresolved: [],
+              },
+            ],
+            newTopics: [],
+            addProtected: [],
+            supersedeProtected: [],
+          },
+        },
+      ],
+    }),
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
+  expect(result.status).toBe("retained");
+  expect(store.journal.at(-1)).toMatchObject({
+    type: "gate_decision",
+    gate: "patch",
+    outcome: "escalation",
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+  });
 });

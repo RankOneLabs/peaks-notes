@@ -1,4 +1,10 @@
-import type { Chunk, Memory, MemoryPatch, TaskContext, Writer } from "../schema";
+import type {
+  Chunk,
+  Memory,
+  MemoryPatch,
+  TaskContext,
+  Writer,
+} from "../schema";
 
 /** Always-writer comparison baseline, independent of classifier output. */
 export const runBaseline = async (

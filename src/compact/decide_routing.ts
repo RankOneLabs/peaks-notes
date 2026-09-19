@@ -42,7 +42,10 @@ export const decideRouting = (
       });
     }
     const current = relations.get(relation.topicId);
-    if (current === undefined || rank[relation.relationship] > rank[current.relationship]) {
+    if (
+      current === undefined ||
+      rank[relation.relationship] > rank[current.relationship]
+    ) {
       relations.set(relation.topicId, relation);
     }
   }
@@ -67,21 +70,44 @@ export const decideRouting = (
   }
 
   const ids = selectedTopics.map(({ id }) => id);
-  if ([...relations.values()].some(({ relationship }) => relationship !== "same_info")) {
-    return ok({ kind: "writer", affectedTopicIds: ids, reason: "new_or_changing_info" });
+  if (
+    [...relations.values()].some(
+      ({ relationship }) => relationship !== "same_info",
+    )
+  ) {
+    return ok({
+      kind: "writer",
+      affectedTopicIds: ids,
+      reason: "new_or_changing_info",
+    });
   }
   if (
     [...relations.values()].some(
       ({ confidence }) => confidence < policy.sameInfoMinConfidence,
     )
   ) {
-    return ok({ kind: "writer", affectedTopicIds: ids, reason: "low_confidence_same_info" });
+    return ok({
+      kind: "writer",
+      affectedTopicIds: ids,
+      reason: "low_confidence_same_info",
+    });
   }
-  if (assessment.uncovered.outcome === "new_topic" || assessment.uncovered.outcome === "uncertain") {
-    return ok({ kind: "writer", affectedTopicIds: ids, reason: `uncovered_${assessment.uncovered.outcome}` });
+  if (
+    assessment.uncovered.outcome === "new_topic" ||
+    assessment.uncovered.outcome === "uncertain"
+  ) {
+    return ok({
+      kind: "writer",
+      affectedTopicIds: ids,
+      reason: `uncovered_${assessment.uncovered.outcome}`,
+    });
   }
   if (assessment.uncovered.confidence < policy.uncoveredNoChangeMinConfidence) {
-    return ok({ kind: "writer", affectedTopicIds: ids, reason: "low_confidence_uncovered" });
+    return ok({
+      kind: "writer",
+      affectedTopicIds: ids,
+      reason: "low_confidence_uncovered",
+    });
   }
   return ok({
     kind: "bypass",

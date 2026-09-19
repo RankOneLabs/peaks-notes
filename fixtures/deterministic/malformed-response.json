@@ -1,1 +1,53 @@
-{"name":"malformed response","description":"Malformed classifier output escalates without advancing memory.","initialMemory":{"revision":1,"topics":[{"id":"topic-1","title":"Network","description":"Network facts","version":1,"summary":"LAN only.","sources":[{"messageId":"message-old"}],"unresolved":[]}],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-malformed","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-new","role":"user","content":"Network update."}]},"taskContext":{"currentTask":"Configure network","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"active","bypassAuditRate":0,"auditSeed":"seed"},"stubs":{"relevance":[{"error":"malformed response"}],"assessments":[],"proposals":[],"compressions":[],"comparisons":[]},"expected":{"status":"retained","revision":1,"reasonIncludes":"malformed"}}
+{
+  "name": "malformed response",
+  "description": "Malformed classifier output escalates without advancing memory.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "LAN only.",
+        "sources": [{ "messageId": "message-old" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-malformed",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      { "id": "message-new", "role": "user", "content": "Network update." }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Configure network",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "stubs": {
+    "relevance": [{ "error": "malformed response" }],
+    "assessments": [],
+    "proposals": [],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": {
+    "status": "retained",
+    "revision": 1,
+    "reasonIncludes": "malformed"
+  }
+}

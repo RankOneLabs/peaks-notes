@@ -7,7 +7,8 @@ export type ModeAction = "writer" | "bypass";
 export const modeAction = (
   mode: PipelineMode,
   routing: RoutingDecision | undefined,
-): ModeAction => (mode === "active" && routing?.kind === "bypass" ? "bypass" : "writer");
+): ModeAction =>
+  mode === "active" && routing?.kind === "bypass" ? "bypass" : "writer";
 
 export const DEFAULT_AUDIT_DEADLINE_MS = 2_000;
 

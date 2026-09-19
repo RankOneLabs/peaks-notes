@@ -1,1 +1,114 @@
-{"name":"two-topic chunk","description":"One chunk updates every selected topic.","initialMemory":{"revision":3,"topics":[{"id":"topic-a","title":"Network","description":"Network facts","version":1,"summary":"LAN.","sources":[{"messageId":"old-a"}],"unresolved":[]},{"id":"topic-b","title":"Deploy","description":"Deployment facts","version":2,"summary":"Staging.","sources":[{"messageId":"old-b"}],"unresolved":[]}],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-two-topic","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-two","role":"user","content":"LAN blocks internet and deploys use canary."}]},"taskContext":{"currentTask":"Ship","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"active","bypassAuditRate":0,"auditSeed":"seed"},"stubs":{"relevance":[{"output":{"topics":[{"topicId":"topic-a","score":0.9},{"topicId":"topic-b","score":0.9}]}}],"assessments":[{"output":{"relations":[{"topicId":"topic-a","relationship":"changing_info","confidence":0.9},{"topicId":"topic-b","relationship":"new_info","confidence":0.9}],"uncovered":{"outcome":"none","confidence":0.9}}}],"proposals":[{"output":{"replacements":[{"topicId":"topic-a","expectedVersion":1,"title":"Network","description":"Network facts","summary":"LAN; internet blocked.","sources":[{"messageId":"message-two"}],"unresolved":[]},{"topicId":"topic-b","expectedVersion":2,"title":"Deploy","description":"Deployment facts","summary":"Staging canary.","sources":[{"messageId":"message-two"}],"unresolved":[]}],"newTopics":[],"addProtected":[],"supersedeProtected":[]}}],"compressions":[],"comparisons":[]},"expected":{"status":"committed","revision":4}}
+{
+  "name": "two-topic chunk",
+  "description": "One chunk updates every selected topic.",
+  "initialMemory": {
+    "revision": 3,
+    "topics": [
+      {
+        "id": "topic-a",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "LAN.",
+        "sources": [{ "messageId": "old-a" }],
+        "unresolved": []
+      },
+      {
+        "id": "topic-b",
+        "title": "Deploy",
+        "description": "Deployment facts",
+        "version": 2,
+        "summary": "Staging.",
+        "sources": [{ "messageId": "old-b" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-two-topic",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-two",
+        "role": "user",
+        "content": "LAN blocks internet and deploys use canary."
+      }
+    ]
+  },
+  "taskContext": { "currentTask": "Ship", "compactionInstructions": [] },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "stubs": {
+    "relevance": [
+      {
+        "output": {
+          "topics": [
+            { "topicId": "topic-a", "score": 0.9 },
+            { "topicId": "topic-b", "score": 0.9 }
+          ]
+        }
+      }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-a",
+              "relationship": "changing_info",
+              "confidence": 0.9
+            },
+            {
+              "topicId": "topic-b",
+              "relationship": "new_info",
+              "confidence": 0.9
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.9 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [
+            {
+              "topicId": "topic-a",
+              "expectedVersion": 1,
+              "title": "Network",
+              "description": "Network facts",
+              "summary": "LAN; internet blocked.",
+              "sources": [{ "messageId": "message-two" }],
+              "unresolved": []
+            },
+            {
+              "topicId": "topic-b",
+              "expectedVersion": 2,
+              "title": "Deploy",
+              "description": "Deployment facts",
+              "summary": "Staging canary.",
+              "sources": [{ "messageId": "message-two" }],
+              "unresolved": []
+            }
+          ],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 4 }
+}

@@ -1,9 +1,9 @@
+import type { StubResponse } from "../replay/fixture";
 import type {
   Evaluator,
   SemanticComparison,
   SemanticComparisonInput,
 } from "../schema";
-import type { StubResponse } from "../replay/fixture";
 
 export class StubEvaluator implements Evaluator {
   readonly calls: SemanticComparisonInput[] = [];
@@ -21,7 +21,8 @@ export class StubEvaluator implements Evaluator {
       await new Promise((done) => setTimeout(done, response.delayMs));
     }
     if (response.error !== undefined) throw new Error(response.error);
-    if (response.output === undefined) throw new Error("stub response has no output");
+    if (response.output === undefined)
+      throw new Error("stub response has no output");
     return structuredClone(response.output);
   }
 }

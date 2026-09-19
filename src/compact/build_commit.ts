@@ -31,8 +31,12 @@ export const buildCommit = (
 ): Commit => {
   const occurredAt = options.occurredAt ?? chunk.createdAt;
   const classifier = {
-    ...(options.relevance === undefined ? {} : { relevance: options.relevance }),
-    ...(options.assessment === undefined ? {} : { assessment: options.assessment }),
+    ...(options.relevance === undefined
+      ? {}
+      : { relevance: options.relevance }),
+    ...(options.assessment === undefined
+      ? {}
+      : { assessment: options.assessment }),
   };
   if (after === undefined || patch === undefined) {
     return {
@@ -69,6 +73,7 @@ export const buildCommit = (
       writerUsage: usage,
       writerLatencyMs: 0,
       previousTopics: structuredClone(before.topics),
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
     },
   };
 };

@@ -1,1 +1,49 @@
-{"name":"explicit preservation instruction","description":"An explicit verbatim instruction deterministically creates a pin.","initialMemory":{"revision":0,"topics":[],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-pin","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-pin","role":"user","content":"Remember exactly: invoice ID A-007."}]},"taskContext":{"currentTask":"Invoice","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"shadow","bypassAuditRate":0,"auditSeed":"seed"},"stubs":{"relevance":[],"assessments":[],"proposals":[{"output":{"replacements":[],"newTopics":[],"addProtected":[],"supersedeProtected":[]}}],"compressions":[],"comparisons":[]},"expected":{"status":"committed","revision":1}}
+{
+  "name": "explicit preservation instruction",
+  "description": "An explicit verbatim instruction deterministically creates a pin.",
+  "initialMemory": {
+    "revision": 0,
+    "topics": [],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-pin",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      {
+        "id": "message-pin",
+        "role": "user",
+        "content": "Remember exactly: invoice ID A-007."
+      }
+    ]
+  },
+  "taskContext": { "currentTask": "Invoice", "compactionInstructions": [] },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "shadow",
+    "bypassAuditRate": 0,
+    "auditSeed": "seed"
+  },
+  "stubs": {
+    "relevance": [],
+    "assessments": [],
+    "proposals": [
+      {
+        "output": {
+          "replacements": [],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": { "status": "committed", "revision": 1 }
+}

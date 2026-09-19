@@ -2,7 +2,7 @@ export type {
   Assessment,
   Classifier,
   ClassifierPolicy,
+  RelationshipInput,
   RelevanceInput,
   RelevanceResult,
-  RelationshipInput,
 } from "../schema";

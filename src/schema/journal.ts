@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { AssessmentSchema, RelevanceResultSchema } from "./classifier";
+import {
+  AssessmentSchema,
+  ClassifierPolicySchema,
+  RelevanceResultSchema,
+} from "./classifier";
 import { SemanticComparisonSchema } from "./evaluation";
 import { ChunkIdSchema, JournalEntryIdSchema } from "./ids";
 import { MemorySchema, TopicSchema } from "./memory";
@@ -52,6 +56,7 @@ export const CommittedUpdateJournalEntrySchema = JournalBaseSchema.extend({
   writerUsage: UsageSchema,
   writerLatencyMs: z.number().nonnegative(),
   previousTopics: z.array(TopicSchema),
+  reason: z.string().optional(),
 }).strict();
 export type CommittedUpdateJournalEntry = z.infer<
   typeof CommittedUpdateJournalEntrySchema
@@ -101,17 +106,39 @@ export type SemanticComparisonJournalEntry = z.infer<
   typeof SemanticComparisonJournalEntrySchema
 >;
 
+/** A retained gate decision, including all policy values needed for replay. */
+export const GateDecisionJournalEntrySchema = JournalBaseSchema.extend({
+  type: z.literal("gate_decision"),
+  gate: z.enum([
+    "protect",
+    "classifier",
+    "relevance",
+    "relationship",
+    "writer",
+    "patch",
+  ]),
+  outcome: z.enum(["failure", "escalation"]),
+  reason: z.string(),
+  classifierPolicy: ClassifierPolicySchema,
+  executionPolicy: ExecutionPolicySchema,
+}).strict();
+export type GateDecisionJournalEntry = z.infer<
+  typeof GateDecisionJournalEntrySchema
+>;
+
 export const JournalEntrySchema = z.discriminatedUnion("type", [
   CommittedUpdateJournalEntrySchema,
   NoUpdateJournalEntrySchema,
   AuditRecordJournalEntrySchema,
   SemanticComparisonJournalEntrySchema,
+  GateDecisionJournalEntrySchema,
 ]);
 export type JournalEntry = z.infer<typeof JournalEntrySchema>;
 
 export const EvaluationJournalEntrySchema = z.discriminatedUnion("type", [
   AuditRecordJournalEntrySchema,
   SemanticComparisonJournalEntrySchema,
+  GateDecisionJournalEntrySchema,
 ]);
 export type EvaluationJournalEntry = z.infer<
   typeof EvaluationJournalEntrySchema

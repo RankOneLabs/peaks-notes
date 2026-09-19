@@ -6,10 +6,15 @@ export const applyPatch = (
   memory: Memory,
   patch: MemoryPatch,
   chunkId?: ChunkId,
-  makeTopicId: TopicIdFactory = (index) => `topic-${memory.revision + 1}-${index + 1}` as TopicId,
+  makeTopicId: TopicIdFactory = (index) =>
+    `topic-${memory.revision + 1}-${index + 1}` as TopicId,
 ): Memory => {
-  const replacements = new Map(patch.replacements.map((item) => [item.topicId, item]));
-  const supersessions = new Map(patch.supersedeProtected.map((item) => [item.id, item.supersededBy]));
+  const replacements = new Map(
+    patch.replacements.map((item) => [item.topicId, item]),
+  );
+  const supersessions = new Map(
+    patch.supersedeProtected.map((item) => [item.id, item.supersededBy]),
+  );
   return {
     revision: memory.revision + 1,
     topics: [
@@ -38,7 +43,11 @@ export const applyPatch = (
         const supersededBy = supersessions.get(record.id);
         return supersededBy === undefined
           ? structuredClone(record)
-          : { ...structuredClone(record), status: "superseded" as const, supersededBy };
+          : {
+              ...structuredClone(record),
+              status: "superseded" as const,
+              supersededBy,
+            };
       }),
       ...structuredClone(patch.addProtected),
     ],

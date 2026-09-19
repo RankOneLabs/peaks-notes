@@ -25,9 +25,12 @@ const response = <T extends z.ZodType>(schema: T) =>
       delayMs: z.number().int().nonnegative().optional(),
     })
     .strict()
-    .refine((value) => (value.output === undefined) !== (value.error === undefined), {
-      message: "a stub response must contain exactly one of output or error",
-    });
+    .refine(
+      (value) => (value.output === undefined) !== (value.error === undefined),
+      {
+        message: "a stub response must contain exactly one of output or error",
+      },
+    );
 
 export const DeterministicFixtureSchema = z
   .object({
@@ -60,6 +63,9 @@ export const DeterministicFixtureSchema = z
         ]),
         revision: z.number().int().nonnegative().optional(),
         auditSampled: z.boolean().optional(),
+        auditOutcome: z
+          .enum(["not_sampled", "empty_patch", "patch", "failed", "timed_out"])
+          .optional(),
         reasonIncludes: z.string().optional(),
       })
       .strict(),

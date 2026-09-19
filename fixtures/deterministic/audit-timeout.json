@@ -1,1 +1,80 @@
-{"name":"audit timeout","description":"An inline audit deadline records timeout while preserving the bypass.","initialMemory":{"revision":1,"topics":[{"id":"topic-1","title":"Network","description":"Network facts","version":1,"summary":"LAN only.","sources":[{"messageId":"message-old"}],"unresolved":[]}],"protected":[],"processedChunkIds":[]},"chunk":{"id":"chunk-audit-timeout","createdAt":"2026-09-18T00:00:00.000Z","messages":[{"id":"message-audit-timeout","role":"user","content":"LAN only."}]},"taskContext":{"currentTask":"Configure network","compactionInstructions":[]},"classifierPolicy":{"relevanceThreshold":0.5,"sameInfoMinConfidence":0.8,"uncoveredNoChangeMinConfidence":0.8},"executionPolicy":{"mode":"active","bypassAuditRate":1,"auditSeed":"seed"},"auditDeadlineMs":1,"stubs":{"relevance":[{"output":{"topics":[{"topicId":"topic-1","score":0.9}]}}],"assessments":[{"output":{"relations":[{"topicId":"topic-1","relationship":"same_info","confidence":0.99}],"uncovered":{"outcome":"none","confidence":0.99}}}],"proposals":[{"delayMs":20,"output":{"replacements":[],"newTopics":[],"addProtected":[],"supersedeProtected":[]}}],"compressions":[],"comparisons":[]},"expected":{"status":"no_update","revision":1,"auditSampled":true}}
+{
+  "name": "audit timeout",
+  "description": "An inline audit deadline records timeout while preserving the bypass.",
+  "initialMemory": {
+    "revision": 1,
+    "topics": [
+      {
+        "id": "topic-1",
+        "title": "Network",
+        "description": "Network facts",
+        "version": 1,
+        "summary": "LAN only.",
+        "sources": [{ "messageId": "message-old" }],
+        "unresolved": []
+      }
+    ],
+    "protected": [],
+    "processedChunkIds": []
+  },
+  "chunk": {
+    "id": "chunk-audit-timeout",
+    "createdAt": "2026-09-18T00:00:00.000Z",
+    "messages": [
+      { "id": "message-audit-timeout", "role": "user", "content": "LAN only." }
+    ]
+  },
+  "taskContext": {
+    "currentTask": "Configure network",
+    "compactionInstructions": []
+  },
+  "classifierPolicy": {
+    "relevanceThreshold": 0.5,
+    "sameInfoMinConfidence": 0.8,
+    "uncoveredNoChangeMinConfidence": 0.8
+  },
+  "executionPolicy": {
+    "mode": "active",
+    "bypassAuditRate": 1,
+    "auditSeed": "seed"
+  },
+  "auditDeadlineMs": 1,
+  "stubs": {
+    "relevance": [
+      { "output": { "topics": [{ "topicId": "topic-1", "score": 0.9 }] } }
+    ],
+    "assessments": [
+      {
+        "output": {
+          "relations": [
+            {
+              "topicId": "topic-1",
+              "relationship": "same_info",
+              "confidence": 0.99
+            }
+          ],
+          "uncovered": { "outcome": "none", "confidence": 0.99 }
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "delayMs": 20,
+        "output": {
+          "replacements": [],
+          "newTopics": [],
+          "addProtected": [],
+          "supersedeProtected": []
+        }
+      }
+    ],
+    "compressions": [],
+    "comparisons": []
+  },
+  "expected": {
+    "status": "no_update",
+    "revision": 1,
+    "auditSampled": true,
+    "auditOutcome": "timed_out"
+  }
+}

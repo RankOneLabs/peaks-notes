@@ -10,8 +10,17 @@ export type CompactEscalation = {
   code: "escalation";
   gate: "relevance" | "relationship" | "patch";
   message: string;
-  policy: Record<string, number>;
+  policy: CompactEscalationPolicy;
 };
+
+export type CompactEscalationPolicy = Partial<
+  Pick<
+    ClassifierPolicy,
+    | "relevanceThreshold"
+    | "sameInfoMinConfidence"
+    | "uncoveredNoChangeMinConfidence"
+  >
+>;
 
 export const selectTopics = (
   topics: readonly Topic[],
@@ -58,7 +67,8 @@ export const selectTopics = (
   }
   return ok(
     topics.filter(
-      (topic) => (scores.get(topic.id) ?? -Infinity) >= policy.relevanceThreshold,
+      (topic) =>
+        (scores.get(topic.id) ?? -Infinity) >= policy.relevanceThreshold,
     ),
   );
 };

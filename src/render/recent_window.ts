@@ -14,17 +14,21 @@ export const recentWindow = (
   const selectedCallIds = new Set<string>();
   for (let index = start; index < end; index += 1) {
     const item = messages[index];
-    if (item !== undefined && "toolCall" in item) selectedCallIds.add(item.toolCall.id);
+    if (item !== undefined && "toolCall" in item)
+      selectedCallIds.add(item.toolCall.id);
     if (item !== undefined && "toolResult" in item) {
       const callIndex = messages.findIndex(
-        (candidate) => "toolCall" in candidate && candidate.toolCall.id === item.toolResult.callId,
+        (candidate) =>
+          "toolCall" in candidate &&
+          candidate.toolCall.id === item.toolResult.callId,
       );
       if (callIndex >= 0) start = Math.min(start, callIndex);
     }
   }
   for (const callId of selectedCallIds) {
     const resultIndex = messages.findIndex(
-      (candidate) => "toolResult" in candidate && candidate.toolResult.callId === callId,
+      (candidate) =>
+        "toolResult" in candidate && candidate.toolResult.callId === callId,
     );
     if (resultIndex >= end) end = resultIndex + 1;
   }
