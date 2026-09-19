@@ -1,6 +1,6 @@
 # Replay evaluation
 
-The fixture manifest declares two development directories and one held-out directory. Threshold tuning accepts only a directory declared under `dev`; it rejects `fixtures/held_out` so held-out labels cannot influence policy selection. The complete set contains 26 hand-labeled cases and maps every required case from specification §8 to at least one fixture.
+The fixture manifest declares two development directories and one held-out directory. Threshold tuning accepts only a directory declared under `dev`; it rejects `fixtures/held_out` so held-out labels cannot influence policy selection. The complete set contains 27 hand-labeled cases and maps every required case from specification §8 to at least one fixture.
 
 Run deterministic acceptance fixtures with recorded stub responses:
 
@@ -8,7 +8,7 @@ Run deterministic acceptance fixtures with recorded stub responses:
 bun run replay --fixtures fixtures/deterministic --adapters stub
 ```
 
-`recorded` consumes the same checked-in adapter transcripts without network access. `live` constructs the configured Jev, writer, and evaluator adapters from the environment described in `docs/jev-adapter.md`. An archived journal uses a JSON object with `entries`, `labels`, and an optional `policy`:
+`recorded` is currently an explicit offline alias for `stub`: both consume the fixture's checked-in adapter response queues without network access. It reserves the mode name for a future standalone trace format; it does not yet load a different transcript schema. `live` constructs the configured Jev, writer, and evaluator adapters from the environment described in `docs/jev-adapter.md`. An archived journal uses a JSON object with `entries`, `labels`, and an optional `policy`:
 
 ```sh
 bun run replay --journal traces/run.json --adapters recorded --report metrics.json
@@ -31,6 +31,8 @@ bun run replay --fixtures fixtures/semantic --adapters stub --mode active --poli
 ```
 
 Never use `fixtures/held_out` in a sweep or other tuning command. Evaluate it only after choosing and recording the policy.
+
+The sweep-record gate applies when the CLI explicitly requests `--mode active`. Fixtures may declare `executionPolicy.mode: "active"` and run as authored without a sweep record; this exception is limited to deterministic harness cases that exercise active routing and audit behavior.
 
 ## Reading the report
 

@@ -145,6 +145,9 @@ const runFixture = async (
   const store = new ReplayStore(fixture.initialMemory);
   const adapterMode = options.adapters ?? "stub";
   const live = adapterMode === "live" ? createConfiguredAdapters(loadConfig()) : undefined;
+  // Until a standalone trace schema exists, `recorded` intentionally consumes
+  // the fixture's checked-in queues through the deterministic adapters. It is
+  // an explicit offline alias, not a live-provider configuration.
   const classifier =
     live?.classifier ??
     new StubClassifier({
