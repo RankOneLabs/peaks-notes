@@ -16,6 +16,7 @@ export const ModelAdapterConfigSchema = z
     maxInputTokens: z.number().int().positive().default(32_000),
   })
   .strict();
+export type ModelAdapterConfig = z.infer<typeof ModelAdapterConfigSchema>;
 
 export const AppConfigSchema = z
   .object({
