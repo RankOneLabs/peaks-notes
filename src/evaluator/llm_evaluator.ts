@@ -29,7 +29,13 @@ export class LlmEvaluator implements Evaluator {
 
   async compare(input: SemanticComparisonInput): Promise<SemanticComparison> {
     if (memorySemanticallyEqual(input.before, input.after)) {
-      this.#lastCall = undefined;
+      this.#lastCall = {
+        provider: this.provider.id,
+        model: this.config.model,
+        promptVersion: this.config.promptVersion,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        latencyMs: 0,
+      };
       return { verdict: "equivalent", changes: [] };
     }
     const prompt = buildEvaluatorPrompt(input);

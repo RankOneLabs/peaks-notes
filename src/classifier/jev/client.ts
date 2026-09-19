@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { JevRequest, JevResponse } from "./wire";
 import { parseJevResponse } from "./wire";
 
-export const JEV_INPUT_COST_PER_MILLION_TOKENS_USD = 0.15;
+export const JEV_INPUT_COST_PER_MILLION_TOKENS_USD = 0.042;
 
 export type JevUsage = {
   inputTokens: number;

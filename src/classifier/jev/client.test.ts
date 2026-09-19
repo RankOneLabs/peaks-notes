@@ -27,6 +27,7 @@ test("429 followed by 200 retries with bearer authorization", async () => {
   });
   const result = await client.call(request);
   expect(result.response.answers.topic).toMatchObject({ noul: 0.9 });
+  expect(result.usage.costUsd).toBeCloseTo(0.0000042);
   expect(recorded.requests).toHaveLength(2);
   expect(
     new Headers(recorded.requests[0]?.init?.headers).get("Authorization"),

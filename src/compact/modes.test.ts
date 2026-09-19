@@ -51,4 +51,10 @@ test("semantically unchanged snapshots skip the evaluator provider", async () =>
   });
   expect(result).toEqual({ verdict: "equivalent", changes: [] });
   expect(provider.requests).toHaveLength(0);
+  expect(evaluator.getLastCall()).toMatchObject({
+    provider: "recorded",
+    model: "recorded",
+    promptVersion: "evaluator-test",
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+  });
 });

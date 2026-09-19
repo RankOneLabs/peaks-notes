@@ -36,6 +36,10 @@ Its criteria are `none`, `new_topic`, `transient`, and `uncertain`.
 
 Questions are split across requests at the 32,000 input-token bound while retaining the shared state in every request; no question is omitted. Shared state or an individual state-plus-question that cannot fit returns `incomplete_input`. Relevance and relationship questions are never combined. HTTP 429 and 529 responses use exponential backoff within the configured call deadline.
 
+## Cost accounting
+
+The adapter uses an input rate of **$0.042 per million tokens** (`$42` per billion input tokens); output tokens are free. This is the public Jev rate stated by TypeSafe in [Introducing System One Models and Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) and on the [TypeSafe AI home page](https://typesafe.ai/). The rate was verified on 18 September 2026 and is pinned in code as `JEV_INPUT_COST_PER_MILLION_TOKENS_USD`; update the constant and this note together if provider pricing changes.
+
 ## Pages checked
 
 - [TypeSafe Score primitive](https://docs.typesafe.ai/primitives/score) — official request and response shape, 2–10 zero-indexed ordered levels, probability-weighted score, probabilities, and confidence.

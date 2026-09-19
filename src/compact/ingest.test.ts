@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { StubClassifier } from "../classifier/stub";
+import { LlmEvaluator } from "../evaluator/llm_evaluator";
 import { StubEvaluator } from "../evaluator/stub";
 import { renderContext } from "../render/render";
 import { DeterministicFixtureSchema } from "../replay/fixture";
 import type {
+  Classifier,
   Commit,
   DomainError,
   EvaluationJournalEntry,
@@ -18,6 +20,7 @@ import type {
 } from "../schema";
 import { err, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
+import { RecordedProvider } from "../writer/recorded";
 import { StubWriter } from "../writer/stub";
 import { ingest } from "./ingest";
 import { protect } from "./protect";
@@ -173,6 +176,106 @@ describe("deterministic fixtures", () => {
       }
     });
   }
+});
+
+test("baseline runs every deterministic fixture without classifier calls", async () => {
+  let relevanceCalls = 0;
+  let relationshipCalls = 0;
+  const countingClassifier: Classifier = {
+    async scoreRelevance() {
+      relevanceCalls += 1;
+      throw new Error("baseline must not score relevance");
+    },
+    async classifyRelationships() {
+      relationshipCalls += 1;
+      throw new Error("baseline must not classify relationships");
+    },
+  };
+
+  for (const fixture of fixtures) {
+    const store = new MemoryStore(fixture.initialMemory);
+    await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: countingClassifier,
+      writer: new StubWriter({
+        proposals: fixture.stubs.proposals,
+        compressions: fixture.stubs.compressions,
+      }),
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: fixture.executionPolicy,
+      mode: "baseline",
+      writerDeadlineMs: fixture.writerDeadlineMs ?? 30_000,
+    });
+  }
+
+  expect(relevanceCalls).toBe(0);
+  expect(relationshipCalls).toBe(0);
+});
+
+test("unchanged live evaluation is journaled with the live model identity", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const topic = fixture.initialMemory.topics[0];
+  if (topic === undefined) throw new Error("fixture topic missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const evaluatorProvider = new RecordedProvider([]);
+  const evaluator = new LlmEvaluator(evaluatorProvider, {
+    provider: "openai",
+    apiKey: "unused",
+    model: "live-evaluator-model",
+    deadlineMs: 100,
+    promptVersion: "evaluator-live-v7",
+    maxInputTokens: 32_000,
+  });
+  const result = await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({
+      proposals: [
+        {
+          output: {
+            replacements: [
+              {
+                topicId: topic.id,
+                expectedVersion: topic.version,
+                title: topic.title,
+                description: topic.description,
+                summary: topic.summary,
+                sources: topic.sources,
+                unresolved: topic.unresolved,
+              },
+            ],
+            newTopics: [],
+            addProtected: [],
+            supersedeProtected: [],
+          },
+        },
+      ],
+    }),
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, mode: "shadow" },
+    attemptIdFactory: () => "unchanged-live-evaluator",
+  });
+
+  expect(result.status).toBe("committed");
+  expect(evaluatorProvider.requests).toHaveLength(0);
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison",
+      comparison: { verdict: "equivalent", changes: [] },
+      evaluatorModel: {
+        provider: "recorded",
+        model: "live-evaluator-model",
+        promptVersion: "evaluator-live-v7",
+      },
+    }),
+  );
 });
 
 test("shadow commits a writer patch despite a confident same-info decision", async () => {

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ModelAdapterConfig } from "../config";
 
 export type { ModelAdapterConfig } from "../config";
@@ -68,6 +69,40 @@ const readJson = async (response: Response): Promise<unknown> => {
   }
 };
 
+const OpenAIResponseSchema = z
+  .object({
+    model: z.string().min(1).optional(),
+    usage: z
+      .object({
+        input_tokens: z.number().int().nonnegative(),
+        output_tokens: z.number().int().nonnegative(),
+      })
+      .passthrough(),
+    output: z.array(
+      z
+        .object({
+          content: z.array(
+            z.object({ text: z.string().optional() }).passthrough(),
+          ),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough();
+
+const AnthropicResponseSchema = z
+  .object({
+    model: z.string().min(1).optional(),
+    usage: z
+      .object({
+        input_tokens: z.number().int().nonnegative(),
+        output_tokens: z.number().int().nonnegative(),
+      })
+      .passthrough(),
+    content: z.array(z.object({ text: z.string().optional() }).passthrough()),
+  })
+  .passthrough();
+
 const withAbortDeadline = async (
   deadlineMs: number,
   run: (signal: AbortSignal) => Promise<Response>,
@@ -108,25 +143,21 @@ export const createProvider = (
             },
           ),
         );
-        const body = (await readJson(response)) as Record<string, unknown>;
+        const raw = await readJson(response);
         if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
-        const bodyUsage = (body.usage ?? {}) as Record<string, unknown>;
-        const inputTokens = Number(bodyUsage.input_tokens ?? 0);
-        const outputTokens = Number(bodyUsage.output_tokens ?? 0);
-        const output = Array.isArray(body.output) ? body.output : [];
-        const text = output
-          .flatMap((item) => {
-            const content = (item as { content?: unknown }).content;
-            return Array.isArray(content) ? content : [];
-          })
-          .map((item) => (item as { text?: unknown }).text)
+        const body = OpenAIResponseSchema.parse(raw);
+        const inputTokens = body.usage.input_tokens;
+        const outputTokens = body.usage.output_tokens;
+        const text = body.output
+          .flatMap((item) => item.content)
+          .map((item) => item.text)
           .find((item): item is string => typeof item === "string");
         if (text === undefined)
           throw new Error("OpenAI response omitted output text");
         return {
           text,
           usage: usage(inputTokens, outputTokens),
-          model: String(body.model ?? request.model),
+          model: body.model ?? request.model,
         };
       },
     };
@@ -154,21 +185,20 @@ export const createProvider = (
           },
         ),
       );
-      const body = (await readJson(response)) as Record<string, unknown>;
+      const raw = await readJson(response);
       if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}`);
-      const bodyUsage = (body.usage ?? {}) as Record<string, unknown>;
-      const inputTokens = Number(bodyUsage.input_tokens ?? 0);
-      const outputTokens = Number(bodyUsage.output_tokens ?? 0);
-      const content = Array.isArray(body.content) ? body.content : [];
-      const text = content
-        .map((item) => (item as { text?: unknown }).text)
+      const body = AnthropicResponseSchema.parse(raw);
+      const inputTokens = body.usage.input_tokens;
+      const outputTokens = body.usage.output_tokens;
+      const text = body.content
+        .map((item) => item.text)
         .find((item): item is string => typeof item === "string");
       if (text === undefined)
         throw new Error("Anthropic response omitted output text");
       return {
         text,
         usage: usage(inputTokens, outputTokens),
-        model: String(body.model ?? request.model),
+        model: body.model ?? request.model,
       };
     },
   };

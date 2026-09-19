@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { UpdateInput } from "../schema";
 import { LlmWriter } from "./llm_writer";
 import { parseMemoryPatch } from "./parse";
-import { AdapterError } from "./provider";
+import { AdapterError, createProvider } from "./provider";
 import { RecordedProvider } from "./recorded";
 
 test("parses an exact MemoryPatch JSON object", () => {
@@ -83,5 +83,31 @@ test("deadline expiry is typed and includes elapsed usage", async () => {
     expect(error).toBeInstanceOf(AdapterError);
     expect((error as AdapterError).code).toBe("timeout");
     expect((error as AdapterError).usage.latencyMs).toBeGreaterThanOrEqual(1);
+  }
+});
+
+test("OpenAI and Anthropic response bodies are runtime validated", async () => {
+  for (const provider of ["openai", "anthropic"] as const) {
+    const adapter = createProvider(
+      { ...config, provider },
+      (async () =>
+        new Response(
+          JSON.stringify({ usage: "invalid", content: [], output: [] }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        )) as unknown as typeof fetch,
+    );
+    await expect(
+      adapter.generate({
+        system: "system",
+        user: "user",
+        model: "model",
+        promptVersion: "test",
+        deadlineMs: 100,
+        responseSchemaName: "Test",
+      }),
+    ).rejects.toThrow();
   }
 });

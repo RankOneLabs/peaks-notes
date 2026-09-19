@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createConfiguredAdapters } from "./adapters";
 import { loadConfig } from "./config";
 
 const valid = {
@@ -28,4 +29,11 @@ test("Jev aliases are rejected", () => {
   expect(() => loadConfig({ ...valid, JEV_MODEL: "jev-latest" })).toThrow(
     expect.objectContaining({ field: "jev.model" }),
   );
+});
+
+test("validated configuration constructs all live adapter roles", () => {
+  const adapters = createConfiguredAdapters(loadConfig(valid));
+  expect(adapters.writer.constructor.name).toBe("LlmWriter");
+  expect(adapters.evaluator.constructor.name).toBe("LlmEvaluator");
+  expect(adapters.classifier.constructor.name).toBe("JevClassifier");
 });

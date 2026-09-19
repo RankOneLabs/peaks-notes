@@ -101,3 +101,33 @@ test("invalid probabilities, choices and missing ids are rejected", () => {
     ),
   ).toThrow("missing question id");
 });
+
+test("choice outside the question criteria is rejected", () => {
+  const request: JevRequest = {
+    model: JEV_MODEL,
+    state: "state",
+    questions: {
+      topic: {
+        type: "choice",
+        instructions: "relationship?",
+        criteria: { new_info: "new", same_info: "same" },
+      },
+    },
+  };
+  expect(() =>
+    parseJevResponse(
+      {
+        answers: {
+          topic: {
+            type: "choice",
+            choice: "changing_info",
+            probabilities: { new_info: 0.4, same_info: 0.6 },
+            confidence: 0.2,
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      request,
+    ),
+  ).toThrow("choice outside criteria for question id: topic");
+});
