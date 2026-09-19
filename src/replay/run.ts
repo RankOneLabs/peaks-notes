@@ -237,6 +237,7 @@ export const runReplay = async (options: ReplayOptions): Promise<ReplayResult> =
     if (
       (options.adapters ?? "stub") !== "live" &&
       options.mode === undefined &&
+      options.policy === undefined &&
       options.recordedAuditAssignments === undefined
     )
       assertExpected(item, replay);

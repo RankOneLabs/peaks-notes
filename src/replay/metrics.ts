@@ -202,6 +202,7 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
       addUsage(evaluator, entry.evaluatorUsage, entry.evaluatorLatencyMs);
       if (entry.comparison.verdict === "equivalent") equivalent += 1;
       else if (entry.comparison.verdict === "material_change") material += 1;
+      else inconclusive += 1;
       if (entry.comparison.changes.some((change) => change.assessment === "required_update"))
         requiredUpdate += 1;
       if (entry.comparison.changes.some((change) => change.assessment === "writer_regression"))
@@ -219,7 +220,7 @@ export const computeMetrics = ({ entries, labels, policy }: ComputeMetricsInput)
     }
   }
   const agreementDenominator = equivalent + material;
-  const confirmedMissDenominator = equivalent + requiredUpdate;
+  const confirmedMissDenominator = equivalent + material;
   return {
     fixtures: labels.length,
     relevance: {
