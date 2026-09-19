@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "dev": {
+    "directories": ["fixtures/deterministic", "fixtures/semantic"],
+    "fixtures": [
+      {"file":"fixtures/deterministic/audit-timeout.json","chunkId":"chunk-audit-timeout","requiredCases":["audit_inconclusive"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/classifier-failure-shadow.json","chunkId":"chunk-shadow-failure","requiredCases":["classifier_failure_shadow"],"relevantTopicIds":["topic-1"],"requiresUpdate":true},
+      {"file":"fixtures/deterministic/existing-plus-new-topic.json","chunkId":"chunk-existing-new","requiredCases":["existing_and_new_topic"],"requiresUpdate":true},
+      {"file":"fixtures/deterministic/explicit-preservation-instruction.json","chunkId":"chunk-pin","requiredCases":["explicit_preservation"],"requiresUpdate":true,"protectedContent":["preserve"]},
+      {"file":"fixtures/deterministic/failed-budget-reduction.json","chunkId":"chunk-budget","requiredCases":["failed_budget_reduction"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/low-confidence-same-info.json","chunkId":"chunk-low-confidence","requiredCases":["low_confidence_same_info"],"relevantTopicIds":["topic-1"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/malformed-response.json","chunkId":"chunk-malformed","requiredCases":["malformed_timeout_overlong"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/no-match-useful-content.json","chunkId":"chunk-useful","requiredCases":["uncovered_useful_content"],"requiresUpdate":true},
+      {"file":"fixtures/deterministic/overlong-input.json","chunkId":"chunk-overlong","requiredCases":["malformed_timeout_overlong"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/replayed-chunk.json","chunkId":"chunk-replayed","requiredCases":["replayed_chunk"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/same-seed-audit-assignment.json","chunkId":"chunk-sampled","requiredCases":["stable_audit_assignment"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"same_info"},"requiresUpdate":false},
+      {"file":"fixtures/deterministic/state-changing-receipt.json","chunkId":"chunk-receipt","requiredCases":["state_changing_receipt"],"requiresUpdate":true,"protectedContent":["receipt"]},
+      {"file":"fixtures/deterministic/timeout.json","chunkId":"chunk-timeout","requiredCases":["malformed_timeout_overlong"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/transient-chatter.json","chunkId":"chunk-chatter","requiredCases":["transient_chatter"],"requiresUpdate":false},
+      {"file":"fixtures/deterministic/two-topic-chunk.json","chunkId":"chunk-two-topic","requiredCases":["two_existing_topics"],"relevantTopicIds":["topic-a","topic-b"],"expectedRelationships":{"topic-a":"changing_info","topic-b":"new_info"},"requiresUpdate":true},
+      {"file":"fixtures/semantic/equivalent-restatement.json","chunkId":"chunk-equivalent","requiredCases":["equivalent_restatement","wording_rewrite","active_sampled_bypass_substantive_patch"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"same_info"},"requiresUpdate":false,"humanSpotCheck":true},
+      {"file":"fixtures/semantic/shadow-required-update.json","chunkId":"chunk-shadow-required","requiredCases":["shadow_bypass_substantive_patch"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"changing_info"},"requiresUpdate":true,"criticalUpdate":true,"expectedNoUpdateGate":"same_info","humanSpotCheck":true},
+      {"file":"fixtures/semantic/unsupported-claim.json","chunkId":"chunk-unsupported","requiredCases":["unsupported_claim"],"relevantTopicIds":["topic-1"],"requiresUpdate":false,"humanSpotCheck":true},
+      {"file":"fixtures/semantic/dropped-qualifier.json","chunkId":"chunk-dropped-qualifier","requiredCases":["dropped_qualifier"],"relevantTopicIds":["topic-1"],"requiresUpdate":false,"humanSpotCheck":true},
+      {"file":"fixtures/semantic/comparator-inconclusive.json","chunkId":"chunk-comparator-inconclusive","requiredCases":["comparator_inconclusive"],"relevantTopicIds":["topic-1"],"requiresUpdate":false},
+      {"file":"fixtures/semantic/preference-correction.json","chunkId":"chunk-preference-correction","requiredCases":["preference_correction"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"changing_info"},"requiresUpdate":true,"criticalUpdate":true},
+      {"file":"fixtures/semantic/unsupported-conflict.json","chunkId":"chunk-unsupported-conflict","requiredCases":["unsupported_conflict"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"changing_info"},"requiresUpdate":true}
+    ]
+  },
+  "heldOut": {
+    "directories": ["fixtures/held_out"],
+    "fixtures": [
+      {"file":"fixtures/held_out/brief-critical-correction.json","chunkId":"chunk-held-critical","requiredCases":["brief_critical_correction"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"changing_info"},"requiresUpdate":true,"criticalUpdate":true},
+      {"file":"fixtures/held_out/qualifying-condition.json","chunkId":"chunk-held-qualifier","requiredCases":["qualifying_condition"],"relevantTopicIds":["topic-1"],"expectedRelationships":{"topic-1":"new_info"},"requiresUpdate":true},
+      {"file":"fixtures/held_out/false-positive-match.json","chunkId":"chunk-held-false-positive","requiredCases":["false_positive_match"],"requiresUpdate":false},
+      {"file":"fixtures/held_out/equal-length-tool-output.json","chunkId":"chunk-held-tool-output","requiredCases":["equal_length_tool_output_change"],"requiresUpdate":true,"protectedContent":["FAILED"]}
+    ]
+  },
+  "requiredCases": ["equivalent_restatement","shadow_bypass_substantive_patch","active_sampled_bypass_substantive_patch","wording_rewrite","unsupported_claim","dropped_qualifier","comparator_inconclusive","audit_inconclusive","classifier_failure_shadow","stable_audit_assignment","qualifying_condition","preference_correction","unsupported_conflict","brief_critical_correction","low_confidence_same_info","false_positive_match","uncovered_useful_content","two_existing_topics","existing_and_new_topic","transient_chatter","equal_length_tool_output_change","state_changing_receipt","explicit_preservation","replayed_chunk","malformed_timeout_overlong","failed_budget_reduction"]
+}
