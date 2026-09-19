@@ -1,4 +1,5 @@
 comms/
+peaks/
 node_modules/
 bun.lock
 *.db

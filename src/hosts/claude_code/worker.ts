@@ -37,6 +37,28 @@ export const WorkerArgumentsSchema = z
   .strict();
 export type WorkerArguments = z.infer<typeof WorkerArgumentsSchema>;
 
+/** The pipeline every Claude Code entry point runs: shadow mode, §6 budgets. */
+export const sessionDependencies = (
+  session: string,
+  store: SqliteStore,
+  config: ReturnType<typeof loadConfig>,
+  adapters: ReturnType<typeof createConfiguredAdapters>,
+): PipelineDependencies => ({
+  store,
+  classifier: adapters.classifier,
+  writer: adapters.writer,
+  evaluator: adapters.evaluator,
+  classifierPolicy: SHADOW_CLASSIFIER_POLICY,
+  executionPolicy: { mode: "shadow", bypassAuditRate: 0, auditSeed: session },
+  auditDeadlineMs: config.evaluation.auditDeadlineMs,
+  shadowComparisonDeadlineMs: config.evaluation.shadowComparisonDeadlineMs,
+  budget: {
+    maxTokens: SUMMARY_MAX_TOKENS,
+    summaryBudgetTokens: SUMMARY_TOPIC_TOKENS,
+    tokenizer: new ConservativeTokenizer(),
+  },
+});
+
 const log = (message: string): void =>
   console.log(`${new Date().toISOString()} ${message}`);
 
@@ -55,26 +77,12 @@ export const runWorker = async (args: WorkerArguments): Promise<void> => {
     if (!acquireLock(paths.lock)) return;
     const store = new SqliteStore(paths.database);
     try {
-      const dependencies: PipelineDependencies = {
+      const dependencies = sessionDependencies(
+        args.session,
         store,
-        classifier: adapters.classifier,
-        writer: adapters.writer,
-        evaluator: adapters.evaluator,
-        classifierPolicy: SHADOW_CLASSIFIER_POLICY,
-        executionPolicy: {
-          mode: "shadow",
-          bypassAuditRate: 0,
-          auditSeed: args.session,
-        },
-        auditDeadlineMs: config.evaluation.auditDeadlineMs,
-        shadowComparisonDeadlineMs:
-          config.evaluation.shadowComparisonDeadlineMs,
-        budget: {
-          maxTokens: SUMMARY_MAX_TOKENS,
-          summaryBudgetTokens: SUMMARY_TOPIC_TOKENS,
-          tokenizer: new ConservativeTokenizer(),
-        },
-      };
+        config,
+        adapters,
+      );
       for (
         let target = readPending(paths.pending);
         target > done;
