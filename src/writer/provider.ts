@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ModelAdapterConfig } from "../config";
-import type { ResponseContract } from "../schema";
+import {
+  anthropicResponseSchema,
+  normalizeOpenAIStrictResponse,
+  openAIStrictResponseSchema,
+  type ResponseContract,
+} from "../schema";
 
 export type { ModelAdapterConfig } from "../config";
 
@@ -156,7 +161,9 @@ export const createProvider = (
                             type: "json_schema",
                             name: request.responseContract.name,
                             strict: true,
-                            schema: request.responseContract.schema,
+                            schema: openAIStrictResponseSchema(
+                              request.responseContract.schema,
+                            ),
                           },
                         },
                 }),
@@ -176,7 +183,13 @@ export const createProvider = (
         if (text === undefined)
           throw new Error("OpenAI response omitted output text");
         return {
-          text,
+          text:
+            request.responseContract === undefined
+              ? text
+              : normalizeOpenAIStrictResponse(
+                  text,
+                  request.responseContract.schema,
+                ),
           usage: usage(inputTokens, outputTokens),
           model: body.model ?? request.model,
         };
@@ -204,6 +217,18 @@ export const createProvider = (
                 max_tokens: 8192,
                 system: request.system,
                 messages: [{ role: "user", content: request.user }],
+                ...(request.responseContract === undefined
+                  ? {}
+                  : {
+                      output_config: {
+                        format: {
+                          type: "json_schema",
+                          schema: anthropicResponseSchema(
+                            request.responseContract.schema,
+                          ),
+                        },
+                      },
+                    }),
               }),
             },
           );

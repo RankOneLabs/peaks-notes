@@ -94,6 +94,33 @@ const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
   return parsed.success ? parsed.data : undefined;
 };
 
+const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
+  if (
+    typeof adapter !== "object" ||
+    adapter === null ||
+    !("getActiveCall" in adapter) ||
+    typeof adapter.getActiveCall !== "function"
+  )
+    return undefined;
+  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall());
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterCallFromCause = (cause: unknown): AdapterCall | undefined => {
+  if (typeof cause !== "object" || cause === null || !("usage" in cause))
+    return undefined;
+  const parsed = AdapterCallSchema.safeParse(cause.usage);
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterFailureType = (cause: unknown): "failed" | "timed_out" =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "code" in cause &&
+  cause.code === "timeout"
+    ? "timed_out"
+    : "failed";
+
 const adapterCallFor = (
   adapter: unknown,
   result: object,
@@ -502,14 +529,53 @@ const appendSemanticComparison = async (
           : {
               type: "invalid_response" as const,
               reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
+              evaluatorCall,
             };
       },
-      (cause: unknown) => ({
-        type: "failed" as const,
-        reason: `semantic comparison failed: ${message(cause)}`,
-      }),
+      (cause: unknown) => {
+        const type = adapterFailureType(cause);
+        const failure = {
+          reason: `semantic comparison failed: ${message(cause)}`,
+          evaluatorCall: adapterCallFromCause(cause),
+        };
+        return type === "timed_out"
+          ? { type: "timed_out" as const, ...failure }
+          : { type: "failed" as const, ...failure };
+      },
     );
   const result = await withDeadline(operation, deadlineMs);
+  const evaluatorCall =
+    result.status === "timed_out"
+      ? activeAdapterCall(evaluator)
+      : result.value.evaluatorCall;
+  const callFailure = await appendAdapterCall(
+    dependencies,
+    attempt,
+    chunk,
+    memory,
+    "evaluator",
+    "compare",
+    evaluatorCall,
+    result.status === "timed_out"
+      ? "timed_out"
+      : result.value.type === "comparison"
+        ? "succeeded"
+        : result.value.type === "timed_out"
+          ? "timed_out"
+          : "failed",
+  );
+  if (callFailure !== undefined) {
+    await appendComparisonFailure(
+      dependencies,
+      attempt,
+      chunk,
+      memory,
+      "failed",
+      `evaluator call journal failed: ${callFailure}`,
+      "comparison-call-journal-failure",
+    );
+    return;
+  }
   if (result.status === "timed_out") {
     await appendComparisonFailure(
       dependencies,
@@ -546,28 +612,6 @@ const appendSemanticComparison = async (
 
   let journaled: Result<void, DomainError>;
   try {
-    const evaluatorCall = result.value.evaluatorCall;
-    const callFailure = await appendAdapterCall(
-      dependencies,
-      attempt,
-      chunk,
-      memory,
-      "evaluator",
-      "compare",
-      evaluatorCall,
-    );
-    if (callFailure !== undefined) {
-      await appendComparisonFailure(
-        dependencies,
-        attempt,
-        chunk,
-        memory,
-        "failed",
-        `evaluator call journal failed: ${callFailure}`,
-        "comparison-call-journal-failure",
-      );
-      return;
-    }
     journaled = await dependencies.store.appendJournal({
       type: "semantic_comparison",
       id: journalId(chunk, attempt, "comparison"),
@@ -652,13 +696,22 @@ const appendAudit = async (
           value,
           writerCall: adapterCallFor(dependencies.writer, value),
         }))
-        .catch(() => ({ type: "failed" as const })),
+        .catch((cause: unknown) => {
+          const writerCall = adapterCallFromCause(cause);
+          return adapterFailureType(cause) === "timed_out"
+            ? { type: "timed_out" as const, writerCall }
+            : { type: "failed" as const, writerCall };
+        }),
       deadline,
     );
-    if (result.status === "timed_out") outcome = "timed_out";
-    else {
-      if (result.value.type === "failed") outcome = "failed";
-      else {
+    if (result.status === "timed_out") {
+      outcome = "timed_out";
+      auditWriterCall = activeAdapterCall(dependencies.writer);
+    } else {
+      if (result.value.type === "failed" || result.value.type === "timed_out") {
+        outcome = result.value.type;
+        auditWriterCall = result.value.writerCall;
+      } else {
         auditWriterCall = result.value.writerCall;
         const valid = validatePatch(memory, chunk, result.value.value);
         if (!valid.ok) outcome = "failed";
@@ -1268,7 +1321,8 @@ export const ingest = async (
       memory,
       "writer",
       "propose",
-      lastAdapterCall(dependencies.writer),
+      activeAdapterCall(dependencies.writer) ??
+        lastAdapterCall(dependencies.writer),
       "timed_out",
     );
     return retainAtGate(
@@ -1289,7 +1343,8 @@ export const ingest = async (
       memory,
       "writer",
       "propose",
-      lastAdapterCall(dependencies.writer),
+      adapterCallFromCause(proposalResult.value.cause) ??
+        lastAdapterCall(dependencies.writer),
       "failed",
     );
     if (callJournalFailure !== undefined)

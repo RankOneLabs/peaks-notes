@@ -18,6 +18,7 @@ import {
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
+  #activeCall: { startedAt: number; call: ModelCall } | undefined;
   readonly #callsByResult = new WeakMap<MemoryPatch, ModelCall>();
 
   constructor(
@@ -34,6 +35,18 @@ export class LlmWriter implements Writer {
   getCallFor(result: MemoryPatch): ModelCall | undefined {
     const call = this.#callsByResult.get(result);
     return call === undefined ? undefined : structuredClone(call);
+  }
+
+  getActiveCall(): ModelCall | undefined {
+    return this.#activeCall === undefined
+      ? undefined
+      : {
+          ...structuredClone(this.#activeCall.call),
+          latencyMs: Math.max(
+            0,
+            performance.now() - this.#activeCall.startedAt,
+          ),
+        };
   }
 
   async #call(prompt: { system: string; user: string }): Promise<MemoryPatch> {
@@ -66,6 +79,10 @@ export class LlmWriter implements Writer {
       );
     }
     let response: GenerateResponse;
+    this.#activeCall = {
+      startedAt,
+      call: call(emptyUsage, true, "unknown"),
+    };
     try {
       response = await new Promise<
         Awaited<ReturnType<GenerativeProvider["generate"]>>
@@ -93,6 +110,7 @@ export class LlmWriter implements Writer {
         true,
         timedOut ? "unknown" : "estimated",
       );
+      this.#activeCall = undefined;
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut
@@ -102,6 +120,7 @@ export class LlmWriter implements Writer {
         cause,
       );
     }
+    this.#activeCall = undefined;
     const completedCall = {
       ...call(response.usage, true, "reported"),
       model: response.model,

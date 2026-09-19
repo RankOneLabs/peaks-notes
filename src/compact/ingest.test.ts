@@ -20,6 +20,7 @@ import type {
 } from "../schema";
 import { err, ok } from "../schema";
 import type { CommitResult, Store } from "../store/store";
+import { LlmWriter } from "../writer/llm_writer";
 import { RecordedProvider } from "../writer/recorded";
 import { StubWriter } from "../writer/stub";
 import { ingest } from "./ingest";
@@ -557,6 +558,310 @@ test("active full-rate audit journals but never applies its patch", async () => 
     type: "audit_record",
     outcome: "patch",
   });
+});
+
+test("failed audited writer requests emit canonical call events", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer = new LlmWriter(
+    new RecordedProvider([{ error: new Error("provider unavailable") }]),
+    {
+      provider: "openai",
+      apiKey: "unused",
+      model: "audit-writer",
+      deadlineMs: 100,
+      promptVersion: "writer-v2",
+      maxInputTokens: 32_000,
+    },
+  );
+
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    attemptIdFactory: () => "failed-audit-writer",
+  });
+
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "model_call",
+      role: "writer",
+      operation: "propose",
+      status: "failed",
+      attemptId: "failed-audit-writer",
+    }),
+  );
+});
+
+test("timed-out audited writer requests emit canonical call events", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const writer = new LlmWriter(
+    { id: "never", generate: () => new Promise(() => {}) },
+    {
+      provider: "openai",
+      apiKey: "unused",
+      model: "audit-writer",
+      deadlineMs: 2,
+      promptVersion: "writer-v2",
+      maxInputTokens: 32_000,
+    },
+  );
+
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    auditDeadlineMs: 100,
+    attemptIdFactory: () => "timed-out-audit-writer",
+  });
+
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "model_call",
+      role: "writer",
+      operation: "propose",
+      status: "timed_out",
+      attemptId: "timed-out-audit-writer",
+      usageProvenance: "unknown",
+    }),
+  );
+});
+
+test("failed evaluator requests emit canonical call events", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const evaluator = new LlmEvaluator(
+    new RecordedProvider([{ error: new Error("provider unavailable") }]),
+    {
+      provider: "openai",
+      apiKey: "unused",
+      model: "audit-evaluator",
+      deadlineMs: 100,
+      promptVersion: "unused",
+      maxInputTokens: 32_000,
+    },
+  );
+  const writer = new StubWriter({
+    proposals: [
+      {
+        output: {
+          replacements: [
+            {
+              topicId: "topic-1" as never,
+              expectedVersion: 1,
+              title: "Network",
+              description: "Network facts",
+              summary: "audit-only change",
+              sources: [{ messageId: "message-same" as never }],
+              unresolved: [],
+            },
+          ],
+          newTopics: [],
+          addProtected: [],
+          supersedeProtected: [],
+        },
+      },
+    ],
+  });
+
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    attemptIdFactory: () => "failed-audit-evaluator",
+  });
+
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "model_call",
+      role: "evaluator",
+      operation: "compare",
+      status: "failed",
+      attemptId: "failed-audit-evaluator",
+    }),
+  );
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "semantic_comparison_failure",
+      outcome: "failed",
+    }),
+  );
+});
+
+test("invalid and uncertain evaluator responses emit canonical call events", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const cases = [
+    {
+      name: "invalid",
+      text: JSON.stringify({ verdict: "invalid", changes: [] }),
+      status: "failed",
+    },
+    {
+      name: "uncertain",
+      text: JSON.stringify({ verdict: "uncertain", changes: [] }),
+      status: "succeeded",
+    },
+  ] as const;
+
+  for (const evaluatorCase of cases) {
+    const store = new MemoryStore(fixture.initialMemory);
+    const evaluator = new LlmEvaluator(
+      new RecordedProvider([
+        {
+          response: {
+            text: evaluatorCase.text,
+            model: "audit-evaluator",
+            usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+          },
+        },
+      ]),
+      {
+        provider: "openai",
+        apiKey: "unused",
+        model: "audit-evaluator",
+        deadlineMs: 100,
+        promptVersion: "unused",
+        maxInputTokens: 32_000,
+      },
+    );
+    await ingest(fixture.chunk, fixture.taskContext, {
+      store,
+      classifier: new StubClassifier({
+        relevance: fixture.stubs.relevance,
+        assessments: fixture.stubs.assessments,
+      }),
+      writer: new StubWriter({
+        proposals: [
+          {
+            output: {
+              replacements: [
+                {
+                  topicId: "topic-1" as never,
+                  expectedVersion: 1,
+                  title: "Network",
+                  description: "Network facts",
+                  summary: "audit-only change",
+                  sources: [{ messageId: "message-same" as never }],
+                  unresolved: [],
+                },
+              ],
+              newTopics: [],
+              addProtected: [],
+              supersedeProtected: [],
+            },
+          },
+        ],
+      }),
+      evaluator,
+      classifierPolicy: fixture.classifierPolicy,
+      executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+      attemptIdFactory: () => `${evaluatorCase.name}-audit-evaluator`,
+    });
+
+    expect(store.journal).toContainEqual(
+      expect.objectContaining({
+        type: "model_call",
+        role: "evaluator",
+        operation: "compare",
+        status: evaluatorCase.status,
+        attemptId: `${evaluatorCase.name}-audit-evaluator`,
+      }),
+    );
+  }
+});
+
+test("timed-out evaluator requests emit canonical call events", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const store = new MemoryStore(fixture.initialMemory);
+  const evaluator = new LlmEvaluator(
+    { id: "never", generate: () => new Promise(() => {}) },
+    {
+      provider: "openai",
+      apiKey: "unused",
+      model: "audit-evaluator",
+      deadlineMs: 100,
+      promptVersion: "unused",
+      maxInputTokens: 32_000,
+    },
+  );
+
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer: new StubWriter({
+      proposals: [
+        {
+          output: {
+            replacements: [
+              {
+                topicId: "topic-1" as never,
+                expectedVersion: 1,
+                title: "Network",
+                description: "Network facts",
+                summary: "audit-only change",
+                sources: [{ messageId: "message-same" as never }],
+                unresolved: [],
+              },
+            ],
+            newTopics: [],
+            addProtected: [],
+            supersedeProtected: [],
+          },
+        },
+      ],
+    }),
+    evaluator,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: { ...fixture.executionPolicy, bypassAuditRate: 1 },
+    auditDeadlineMs: 20,
+    attemptIdFactory: () => "timed-out-audit-evaluator",
+  });
+
+  expect(store.journal).toContainEqual(
+    expect.objectContaining({
+      type: "model_call",
+      role: "evaluator",
+      operation: "compare",
+      status: "timed_out",
+      attemptId: "timed-out-audit-evaluator",
+      usageProvenance: "unknown",
+    }),
+  );
 });
 
 test("a non-settling active evaluator is bounded by the remaining audit budget", async () => {

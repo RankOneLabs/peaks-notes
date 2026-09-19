@@ -248,16 +248,33 @@ export const computeMetrics = ({
   let writerReviewedNoUpdates = 0;
   let budgetFailures = 0;
   let retainedFailures = 0;
-  const hasCanonicalCalls = entries.some(
-    (entry) => entry.type === "model_call",
+  const callScope = (
+    role: "classifier" | "writer" | "evaluator",
+    entry: Pick<JournalEntry, "chunkId" | "attemptId">,
+  ): string =>
+    `${role}\u0000${entry.chunkId}\u0000${entry.attemptId ?? "legacy"}`;
+  const canonicalCallScopes = new Set(
+    entries
+      .filter(
+        (entry): entry is Extract<JournalEntry, { type: "model_call" }> =>
+          entry.type === "model_call",
+      )
+      .map((entry) => callScope(entry.role, entry)),
   );
+  const hasCanonicalCall = (
+    role: "classifier" | "writer" | "evaluator",
+    entry: Pick<JournalEntry, "chunkId" | "attemptId">,
+  ): boolean => canonicalCallScopes.has(callScope(role, entry));
 
   for (const entry of entries) {
     if (entry.type === "committed_update") {
       committedUpdates += 1;
-      if (!hasCanonicalCalls)
+      if (!hasCanonicalCall("writer", entry))
         addUsage(writer, entry.writerUsage, entry.writerLatencyMs);
-      if (!hasCanonicalCalls && entry.classifier?.usage !== undefined)
+      if (
+        !hasCanonicalCall("classifier", entry) &&
+        entry.classifier?.usage !== undefined
+      )
         addUsage(
           classifier,
           entry.classifier.usage,
@@ -268,7 +285,10 @@ export const computeMetrics = ({
       const route = routes.get(entry.chunkId);
       if (route?.route !== "bypass" || route.protectionOverride)
         writerReviewedNoUpdates += 1;
-      if (!hasCanonicalCalls && entry.classifier.usage !== undefined)
+      if (
+        !hasCanonicalCall("classifier", entry) &&
+        entry.classifier.usage !== undefined
+      )
         addUsage(
           classifier,
           entry.classifier.usage,
@@ -287,10 +307,10 @@ export const computeMetrics = ({
           failed += 1;
         else completed += 1;
       }
-      if (!hasCanonicalCalls && entry.writerUsage !== undefined)
+      if (!hasCanonicalCall("writer", entry) && entry.writerUsage !== undefined)
         addUsage(writer, entry.writerUsage, entry.writerLatencyMs ?? 0);
     } else if (entry.type === "semantic_comparison") {
-      if (!hasCanonicalCalls)
+      if (!hasCanonicalCall("evaluator", entry))
         addUsage(evaluator, entry.evaluatorUsage, entry.evaluatorLatencyMs);
       if (entry.comparison.verdict === "equivalent") equivalent += 1;
       else if (entry.comparison.verdict === "material_change") material += 1;
@@ -366,14 +386,18 @@ export const computeMetrics = ({
       amongBypassesRate: ratio(falseNoUpdateCount, bypassCount),
       byGate,
     },
-    classifierPolicy: {
-      eligibleLabeled: labels.length,
-      evaluatedLabeled,
-      predictedBypasses,
-      requiredUpdatesPredictedBypass: falseNoUpdateCount,
-      criticalMisses: missedCriticalUpdates,
-      unavailable,
-    },
+    ...(routes.size === 0
+      ? {}
+      : {
+          classifierPolicy: {
+            eligibleLabeled: labels.length,
+            evaluatedLabeled,
+            predictedBypasses,
+            requiredUpdatesPredictedBypass: falseNoUpdateCount,
+            criticalMisses: missedCriticalUpdates,
+            unavailable,
+          },
+        }),
     authoritative: {
       activeBypasses,
       writerReviewedNoUpdates,

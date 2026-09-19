@@ -17,6 +17,7 @@ import { memorySemanticallyEqual } from "./snapshot_diff";
 
 export class LlmEvaluator implements Evaluator {
   #lastCall: ModelCall | undefined;
+  #activeCall: { startedAt: number; call: ModelCall } | undefined;
   readonly #callsByResult = new WeakMap<SemanticComparison, ModelCall>();
   constructor(
     readonly provider: GenerativeProvider,
@@ -32,6 +33,18 @@ export class LlmEvaluator implements Evaluator {
   getCallFor(result: SemanticComparison): ModelCall | undefined {
     const call = this.#callsByResult.get(result);
     return call === undefined ? undefined : structuredClone(call);
+  }
+
+  getActiveCall(): ModelCall | undefined {
+    return this.#activeCall === undefined
+      ? undefined
+      : {
+          ...structuredClone(this.#activeCall.call),
+          latencyMs: Math.max(
+            0,
+            performance.now() - this.#activeCall.startedAt,
+          ),
+        };
   }
 
   #record(result: SemanticComparison, call: ModelCall): SemanticComparison {
@@ -85,6 +98,10 @@ export class LlmEvaluator implements Evaluator {
       );
     }
     try {
+      this.#activeCall = {
+        startedAt,
+        call: call(0, true, "unknown"),
+      };
       const response = await new Promise<
         Awaited<ReturnType<GenerativeProvider["generate"]>>
       >((resolve, reject) => {
@@ -112,6 +129,7 @@ export class LlmEvaluator implements Evaluator {
         dispatched: true,
         usageProvenance: "reported",
       };
+      this.#activeCall = undefined;
       try {
         const result = parseSemanticComparison(response.text);
         return this.#record(result, completedCall);
@@ -125,6 +143,7 @@ export class LlmEvaluator implements Evaluator {
         );
       }
     } catch (cause) {
+      this.#activeCall = undefined;
       if (cause instanceof AdapterError) throw cause;
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";
