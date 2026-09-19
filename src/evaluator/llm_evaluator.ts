@@ -19,7 +19,10 @@ import { memorySemanticallyEqual } from "./snapshot_diff";
 
 export class LlmEvaluator implements Evaluator {
   #lastCall: ModelCall | undefined;
-  #activeCall: { startedAt: number; call: ModelCall } | undefined;
+  readonly #activeCalls = new Map<
+    AbortSignal | undefined,
+    { startedAt: number; call: ModelCall }
+  >();
   readonly #callsByResult = new WeakMap<SemanticComparison, ModelCall>();
   constructor(
     readonly provider: GenerativeProvider,
@@ -37,15 +40,14 @@ export class LlmEvaluator implements Evaluator {
     return call === undefined ? undefined : structuredClone(call);
   }
 
-  getActiveCall(): ModelCall | undefined {
-    return this.#activeCall === undefined
+  /** The in-flight call started under `signal`; concurrent operations stay separate. */
+  getActiveCall(signal?: AbortSignal): ModelCall | undefined {
+    const active = this.#activeCalls.get(signal);
+    return active === undefined
       ? undefined
       : {
-          ...structuredClone(this.#activeCall.call),
-          latencyMs: Math.max(
-            0,
-            performance.now() - this.#activeCall.startedAt,
-          ),
+          ...structuredClone(active.call),
+          latencyMs: Math.max(0, performance.now() - active.startedAt),
         };
   }
 
@@ -105,7 +107,7 @@ export class LlmEvaluator implements Evaluator {
     }
     const active = { startedAt, call: call(0, true, "unknown") };
     try {
-      this.#activeCall = active;
+      this.#activeCalls.set(signal, active);
       const response = await generateWithin(this.provider, {
         ...prompt,
         model: this.config.model,
@@ -123,7 +125,8 @@ export class LlmEvaluator implements Evaluator {
         dispatched: true,
         usageProvenance: "reported",
       };
-      if (this.#activeCall === active) this.#activeCall = undefined;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       try {
         const result = parseSemanticComparison(response.text);
         return this.#record(result, completedCall);
@@ -137,7 +140,8 @@ export class LlmEvaluator implements Evaluator {
         );
       }
     } catch (cause) {
-      if (this.#activeCall === active) this.#activeCall = undefined;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       if (cause instanceof AdapterError) throw cause;
       const timedOut =
         cause instanceof DOMException && cause.name === "AbortError";

@@ -22,6 +22,10 @@ export const SourceRefSchema = z
     {
       message: "source start must not exceed end",
     },
+  )
+  .refine(
+    (value) => (value.start === undefined) === (value.end === undefined),
+    { message: "source start and end must be given together" },
   );
 export type SourceRef = z.infer<typeof SourceRefSchema>;
 

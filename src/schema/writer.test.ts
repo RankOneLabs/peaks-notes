@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SourceRefSchema } from "./memory";
 import { MemoryPatchSchema, UpdateInputSchema } from "./writer";
 
 const emptyPatch = {
@@ -63,5 +64,18 @@ describe("UpdateInputSchema", () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.chunk.messages).toHaveLength(1);
+  });
+});
+
+describe("SourceRefSchema", () => {
+  test.each([
+    [{ messageId: "m" }, true],
+    [{ messageId: "m", start: 0, end: 0 }, true],
+    [{ messageId: "m", start: 2, end: 5 }, true],
+    [{ messageId: "m", start: 2 }, false],
+    [{ messageId: "m", end: 5 }, false],
+    [{ messageId: "m", start: 5, end: 2 }, false],
+  ])("%j parses: %p", (value, valid) => {
+    expect(SourceRefSchema.safeParse(value).success).toBe(valid);
   });
 });

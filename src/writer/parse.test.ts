@@ -323,3 +323,52 @@ test("writer records the provider-resolved model", async () => {
     schema: expect.objectContaining({ type: "object" }),
   });
 });
+
+test("concurrent calls keep separate active-call state per signal", async () => {
+  const writer = new LlmWriter(
+    { id: "never", generate: () => new Promise(() => {}) },
+    config,
+  );
+  const first = new AbortController();
+  const second = new AbortController();
+  const calls = [
+    writer.propose(input, { signal: first.signal }),
+    writer.propose(input, { signal: second.signal }),
+  ].map((call) => call.catch((cause: unknown) => cause));
+
+  expect(writer.getActiveCall(first.signal)).toBeDefined();
+  expect(writer.getActiveCall(second.signal)).toBeDefined();
+  first.abort();
+  expect(await calls[0]).toMatchObject({ code: "timeout" });
+  expect(writer.getActiveCall(first.signal)).toBeUndefined();
+  expect(writer.getActiveCall(second.signal)).toBeDefined();
+  second.abort();
+  await calls[1];
+  expect(writer.getActiveCall(second.signal)).toBeUndefined();
+});
+
+test("a recorded provider stops its delay when the signal aborts", async () => {
+  const provider = new RecordedProvider([
+    {
+      response: {
+        text: "{}",
+        model: "recorded-model",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+      delayMs: 60_000,
+    },
+  ]);
+  const controller = new AbortController();
+  const pending = provider.generate({
+    system: "s",
+    user: "u",
+    model: "recorded-model",
+    promptVersion: "writer-test",
+    deadlineMs: 60_000,
+    responseContract: MemoryPatchContract,
+    signal: controller.signal,
+  });
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(provider.requests[0]).not.toHaveProperty("signal");
+});

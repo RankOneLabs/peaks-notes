@@ -20,7 +20,10 @@ import {
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
-  #activeCall: { startedAt: number; call: ModelCall } | undefined;
+  readonly #activeCalls = new Map<
+    AbortSignal | undefined,
+    { startedAt: number; call: ModelCall }
+  >();
   readonly #callsByResult = new WeakMap<MemoryPatch, ModelCall>();
 
   constructor(
@@ -39,15 +42,14 @@ export class LlmWriter implements Writer {
     return call === undefined ? undefined : structuredClone(call);
   }
 
-  getActiveCall(): ModelCall | undefined {
-    return this.#activeCall === undefined
+  /** The in-flight call started under `signal`; concurrent operations stay separate. */
+  getActiveCall(signal?: AbortSignal): ModelCall | undefined {
+    const active = this.#activeCalls.get(signal);
+    return active === undefined
       ? undefined
       : {
-          ...structuredClone(this.#activeCall.call),
-          latencyMs: Math.max(
-            0,
-            performance.now() - this.#activeCall.startedAt,
-          ),
+          ...structuredClone(active.call),
+          latencyMs: Math.max(0, performance.now() - active.startedAt),
         };
   }
 
@@ -85,7 +87,7 @@ export class LlmWriter implements Writer {
     }
     let response: GenerateResponse;
     const active = { startedAt, call: call(emptyUsage, true, "unknown") };
-    this.#activeCall = active;
+    this.#activeCalls.set(signal, active);
     try {
       response = await generateWithin(this.provider, {
         ...prompt,
@@ -105,7 +107,8 @@ export class LlmWriter implements Writer {
       );
       // A cancelled call may settle during a later call; leave that call's state alone.
       if (signal?.aborted !== true) this.#lastCall = failedCall;
-      if (this.#activeCall === active) this.#activeCall = undefined;
+      if (this.#activeCalls.get(signal) === active)
+        this.#activeCalls.delete(signal);
       throw new AdapterError(
         timedOut ? "timeout" : "provider_error",
         timedOut
@@ -115,7 +118,8 @@ export class LlmWriter implements Writer {
         cause,
       );
     }
-    if (this.#activeCall === active) this.#activeCall = undefined;
+    if (this.#activeCalls.get(signal) === active)
+      this.#activeCalls.delete(signal);
     const completedCall = {
       ...call(response.usage, true, "reported"),
       model: response.model,

@@ -280,3 +280,13 @@ test("archived journal replay loads labels, entries, and recorded assignments", 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a baseline override skips expectations authored for another mode", async () => {
+  const result = await runReplay({
+    fixtures: "fixtures/deterministic",
+    adapters: "stub",
+    mode: "baseline",
+  });
+  expect(result.assertions.asserted).toBe(0);
+  expect(result.assertions.skipped).toHaveLength(result.fixtures.length);
+});

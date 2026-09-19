@@ -244,7 +244,10 @@ const runFixture = async (
 const matchesAuthoredPolicy = (
   loaded: LoadedFixture,
   replay: FixtureReplayResult,
+  mode: ReplayOptions["mode"],
 ): boolean =>
+  // A baseline override leaves executionPolicy.mode untouched, so compare the override itself.
+  (mode === undefined || mode === loaded.fixture.executionPolicy.mode) &&
   replay.executionPolicy.mode === loaded.fixture.executionPolicy.mode &&
   replay.executionPolicy.bypassAuditRate ===
     loaded.fixture.executionPolicy.bypassAuditRate &&
@@ -344,7 +347,7 @@ export const runReplay = async (
     const replay = await runFixture(item, effectiveOptions);
     if (
       (options.adapters ?? "stub") !== "live" &&
-      matchesAuthoredPolicy(item, replay)
+      matchesAuthoredPolicy(item, replay, effectiveOptions.mode)
     ) {
       assertExpected(item, replay);
       assertedCount += 1;

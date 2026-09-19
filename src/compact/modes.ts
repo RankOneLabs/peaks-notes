@@ -21,7 +21,7 @@ export const DEFAULT_WRITER_DEADLINE_MS = 30_000;
 export const withDeadline = async <T>(
   operation: (signal: AbortSignal) => Promise<T>,
   deadlineMs: number,
-  beforeAbort?: () => void,
+  beforeAbort?: (signal: AbortSignal) => void,
 ): Promise<{ status: "completed"; value: T } | { status: "timed_out" }> => {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -32,7 +32,7 @@ export const withDeadline = async <T>(
         .then((value) => ({ status: "completed" as const, value })),
       new Promise<{ status: "timed_out" }>((resolve) => {
         timer = setTimeout(() => {
-          beforeAbort?.();
+          beforeAbort?.(controller.signal);
           controller.abort();
           resolve({ status: "timed_out" });
         }, deadlineMs);

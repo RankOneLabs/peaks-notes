@@ -96,7 +96,10 @@ const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
   return parsed.success ? parsed.data : undefined;
 };
 
-const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
+const activeAdapterCall = (
+  adapter: unknown,
+  signal: AbortSignal,
+): AdapterCall | undefined => {
   if (
     typeof adapter !== "object" ||
     adapter === null ||
@@ -104,7 +107,7 @@ const activeAdapterCall = (adapter: unknown): AdapterCall | undefined => {
     typeof adapter.getActiveCall !== "function"
   )
     return undefined;
-  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall());
+  const parsed = AdapterCallSchema.safeParse(adapter.getActiveCall(signal));
   return parsed.success ? parsed.data : undefined;
 };
 
@@ -149,8 +152,8 @@ const withAdapterDeadline = async <T>(
   | { status: "timed_out"; call: AdapterCall | undefined }
 > => {
   let call: AdapterCall | undefined;
-  const result = await withDeadline(operation, deadlineMs, () => {
-    call = activeAdapterCall(adapter);
+  const result = await withDeadline(operation, deadlineMs, (signal) => {
+    call = activeAdapterCall(adapter, signal);
   });
   return result.status === "timed_out" ? { status: "timed_out", call } : result;
 };
