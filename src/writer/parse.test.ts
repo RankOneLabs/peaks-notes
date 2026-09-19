@@ -111,3 +111,83 @@ test("OpenAI and Anthropic response bodies are runtime validated", async () => {
     ).rejects.toThrow();
   }
 });
+
+test("provider deadline remains active while consuming the response body", async () => {
+  for (const provider of ["openai", "anthropic"] as const) {
+    let signal: AbortSignal | undefined;
+    const adapter = createProvider({ ...config, provider }, (async (
+      _input,
+      init,
+    ) => {
+      signal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () =>
+              reject(new DOMException("deadline expired", "AbortError")),
+            );
+          }),
+      } as Response;
+    }) as typeof fetch);
+    await expect(
+      adapter.generate({
+        system: "system",
+        user: "user",
+        model: "model",
+        promptVersion: "test",
+        deadlineMs: 2,
+        responseSchemaName: "Test",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  }
+});
+
+test("OpenAI checks status before decoding and disables response storage", async () => {
+  let body: Record<string, unknown> | undefined;
+  const adapter = createProvider({ ...config, provider: "openai" }, (async (
+    _input,
+    init,
+  ) => {
+    body = JSON.parse(String(init?.body));
+    return {
+      ok: false,
+      status: 401,
+      json: () => Promise.reject(new Error("must not decode")),
+    } as Response;
+  }) as typeof fetch);
+  await expect(
+    adapter.generate({
+      system: "system",
+      user: "user",
+      model: "model",
+      promptVersion: "test",
+      deadlineMs: 100,
+      responseSchemaName: "Test",
+    }),
+  ).rejects.toThrow("OpenAI HTTP 401");
+  expect(body?.store).toBe(false);
+});
+
+test("writer records the provider-resolved model", async () => {
+  const writer = new LlmWriter(
+    new RecordedProvider([
+      {
+        response: {
+          text: JSON.stringify({
+            replacements: [],
+            newTopics: [],
+            addProtected: [],
+            supersedeProtected: [],
+          }),
+          model: "resolved-model-2026-09-18",
+          usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+        },
+      },
+    ]),
+    config,
+  );
+  await writer.propose(input);
+  expect(writer.getLastCall()?.model).toBe("resolved-model-2026-09-18");
+});

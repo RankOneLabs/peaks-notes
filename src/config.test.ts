@@ -31,6 +31,32 @@ test("Jev aliases are rejected", () => {
   );
 });
 
+test("different evaluator providers require an evaluator model", () => {
+  expect(() =>
+    loadConfig({
+      ...valid,
+      EVALUATOR_PROVIDER: "anthropic",
+      ANTHROPIC_API_KEY: "evaluator-secret",
+    }),
+  ).toThrow(
+    expect.objectContaining({
+      code: "configuration_error",
+      field: "EVALUATOR_MODEL",
+    }),
+  );
+});
+
+test("configured prompt versions must name implemented templates", () => {
+  expect(() =>
+    loadConfig({ ...valid, EVALUATOR_PROMPT_VERSION: "future-v2" }),
+  ).toThrow(
+    expect.objectContaining({
+      code: "configuration_error",
+      field: "EVALUATOR_PROMPT_VERSION",
+    }),
+  );
+});
+
 test("validated configuration constructs all live adapter roles", () => {
   const adapters = createConfiguredAdapters(loadConfig(valid));
   expect(adapters.writer.constructor.name).toBe("LlmWriter");

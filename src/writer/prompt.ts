@@ -15,6 +15,10 @@ const outputContract = `Return only one JSON object matching MemoryPatch: {repla
 
 export type Prompt = { system: string; user: string };
 
+/** JSON data cannot terminate the surrounding XML-like prompt delimiter. */
+const serializeData = (value: unknown): string =>
+  JSON.stringify(value).replaceAll("<", "\\u003c");
+
 const instructions = (
   task: string,
   compactionInstructions: string[],
@@ -40,16 +44,16 @@ export const buildUpdatePrompt = (input: UpdateInput): Prompt => ({
   ),
   user: [
     "<memory-data>",
-    JSON.stringify(input.memory),
+    serializeData(input.memory),
     "</memory-data>",
     "<affected-topic-ids-data>",
-    JSON.stringify(input.affectedTopicIds),
+    serializeData(input.affectedTopicIds),
     "</affected-topic-ids-data>",
     "<assessment-data>",
-    JSON.stringify(input.assessment ?? null),
+    serializeData(input.assessment ?? null),
     "</assessment-data>",
     "<transcript-data>",
-    JSON.stringify(input.chunk),
+    serializeData(input.chunk),
     "</transcript-data>",
   ].join("\n"),
 });
@@ -63,7 +67,7 @@ export const buildCompressPrompt = (input: CompressInput): Prompt => ({
     ),
     `Compress summaries to at most ${input.maxSummaryTokens} estimated tokens without removing protected records or necessary evidence.`,
   ].join("\n\n"),
-  user: ["<memory-data>", JSON.stringify(input.memory), "</memory-data>"].join(
+  user: ["<memory-data>", serializeData(input.memory), "</memory-data>"].join(
     "\n",
   ),
 });

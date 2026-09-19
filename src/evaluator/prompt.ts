@@ -3,6 +3,10 @@ import { buildSnapshotViews } from "./snapshot_diff";
 
 export const EVALUATOR_PROMPT_VERSION = "evaluator-v1";
 
+/** JSON data cannot terminate the surrounding XML-like prompt delimiter. */
+const serializeData = (value: unknown): string =>
+  JSON.stringify(value).replaceAll("<", "\\u003c");
+
 export const buildEvaluatorPrompt = (
   input: SemanticComparisonInput,
 ): {
@@ -26,13 +30,13 @@ export const buildEvaluatorPrompt = (
     ].join("\n\n"),
     user: [
       "<before-memory-data>",
-      JSON.stringify(views.before),
+      serializeData(views.before),
       "</before-memory-data>",
       "<after-memory-data>",
-      JSON.stringify(views.after),
+      serializeData(views.after),
       "</after-memory-data>",
       "<transcript-data>",
-      JSON.stringify(input.chunk),
+      serializeData(input.chunk),
       "</transcript-data>",
     ].join("\n"),
   };

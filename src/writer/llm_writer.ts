@@ -17,6 +17,7 @@ import {
 
 export class LlmWriter implements Writer {
   #lastCall: ModelCall | undefined;
+  readonly #callsByResult = new WeakMap<MemoryPatch, ModelCall>();
 
   constructor(
     readonly provider: GenerativeProvider,
@@ -27,6 +28,11 @@ export class LlmWriter implements Writer {
     return this.#lastCall === undefined
       ? undefined
       : structuredClone(this.#lastCall);
+  }
+
+  getCallFor(result: MemoryPatch): ModelCall | undefined {
+    const call = this.#callsByResult.get(result);
+    return call === undefined ? undefined : structuredClone(call);
   }
 
   async #call(prompt: { system: string; user: string }): Promise<MemoryPatch> {
@@ -85,9 +91,12 @@ export class LlmWriter implements Writer {
         cause,
       );
     }
-    this.#lastCall = call(response.usage);
+    const completedCall = { ...call(response.usage), model: response.model };
+    this.#lastCall = completedCall;
     try {
-      return parseMemoryPatch(response.text);
+      const result = parseMemoryPatch(response.text);
+      this.#callsByResult.set(result, structuredClone(completedCall));
+      return result;
     } catch (cause) {
       throw new AdapterError(
         "invalid_response",

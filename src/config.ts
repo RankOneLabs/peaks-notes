@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { EVALUATOR_PROMPT_VERSION } from "./evaluator/prompt";
+import { WRITER_PROMPT_VERSION } from "./writer/prompt";
 
 const PositiveMillisecondsSchema = z.coerce.number().int().positive();
 
@@ -67,6 +69,21 @@ const optional = (
   fallback: string,
 ): string => environment[field] ?? fallback;
 
+const pinnedPromptVersion = (
+  environment: Record<string, string | undefined>,
+  field: string,
+  expected: string,
+): string => {
+  const configured = optional(environment, field, expected);
+  if (configured !== expected) {
+    throw new ConfigurationError(
+      `invalid configuration: ${field} must be ${expected}`,
+      field,
+    );
+  }
+  return configured;
+};
+
 /** Parse all model configuration at startup; no credential is ever serialized. */
 export const loadConfig = (
   environment: Record<string, string | undefined> = process.env,
@@ -104,10 +121,10 @@ export const loadConfig = (
         ? {}
         : { endpoint: environment.WRITER_ENDPOINT }),
       deadlineMs: optional(environment, "WRITER_DEADLINE_MS", "30000"),
-      promptVersion: optional(
+      promptVersion: pinnedPromptVersion(
         environment,
         "WRITER_PROMPT_VERSION",
-        "writer-v1",
+        WRITER_PROMPT_VERSION,
       ),
       maxInputTokens: Number(
         optional(environment, "WRITER_MAX_INPUT_TOKENS", "32000"),
@@ -126,15 +143,18 @@ export const loadConfig = (
             )
           : required(environment, evaluatorKeyField)),
       model:
-        environment.EVALUATOR_MODEL ?? required(environment, "WRITER_MODEL"),
+        environment.EVALUATOR_MODEL ??
+        (evaluatorProvider.data === writerProvider.data
+          ? required(environment, "WRITER_MODEL")
+          : required(environment, "EVALUATOR_MODEL")),
       ...(environment.EVALUATOR_ENDPOINT === undefined
         ? {}
         : { endpoint: environment.EVALUATOR_ENDPOINT }),
       deadlineMs: optional(environment, "EVALUATOR_DEADLINE_MS", "30000"),
-      promptVersion: optional(
+      promptVersion: pinnedPromptVersion(
         environment,
         "EVALUATOR_PROMPT_VERSION",
-        "evaluator-v1",
+        EVALUATOR_PROMPT_VERSION,
       ),
       maxInputTokens: Number(
         optional(environment, "EVALUATOR_MAX_INPUT_TOKENS", "32000"),

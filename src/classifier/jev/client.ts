@@ -97,8 +97,8 @@ export class JevClient {
           cause,
         );
       }
-      clearTimeout(timer);
       if (response.status === 429 || response.status === 529) {
+        clearTimeout(timer);
         const wait = Math.min(
           delayMs,
           this.options.deadlineMs - (this.#now() - startedAt),
@@ -108,8 +108,9 @@ export class JevClient {
         delayMs *= 2;
         continue;
       }
-      const latencyMs = Math.max(0, this.#now() - startedAt);
       if (!response.ok) {
+        clearTimeout(timer);
+        const latencyMs = Math.max(0, this.#now() - startedAt);
         throw new JevClientError(
           "http_error",
           `Jev HTTP ${response.status}`,
@@ -120,6 +121,8 @@ export class JevClient {
       try {
         raw = await response.json();
         const parsed = parseJevResponse(raw, request);
+        clearTimeout(timer);
+        const latencyMs = Math.max(0, this.#now() - startedAt);
         const inputTokens = parsed.usage.input_tokens;
         const outputTokens = parsed.usage.output_tokens;
         return {
@@ -133,11 +136,17 @@ export class JevClient {
           },
         };
       } catch (cause) {
+        clearTimeout(timer);
+        const latencyMs = Math.max(0, this.#now() - startedAt);
+        const timedOut =
+          cause instanceof DOMException && cause.name === "AbortError";
         throw new JevClientError(
-          "invalid_response",
-          cause instanceof z.ZodError
-            ? `invalid Jev response: ${cause.issues.map((issue) => issue.message).join("; ")}`
-            : `invalid Jev response: ${cause instanceof Error ? cause.message : String(cause)}`,
+          timedOut ? "timeout" : "invalid_response",
+          timedOut
+            ? `Jev deadline expired after ${latencyMs}ms`
+            : cause instanceof z.ZodError
+              ? `invalid Jev response: ${cause.issues.map((issue) => issue.message).join("; ")}`
+              : `invalid Jev response: ${cause instanceof Error ? cause.message : String(cause)}`,
           emptyUsage(latencyMs),
           cause,
         );

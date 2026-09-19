@@ -65,6 +65,8 @@ const readJson = async (response: Response): Promise<unknown> => {
   try {
     return await response.json();
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError")
+      throw cause;
     throw new Error("provider returned non-JSON response", { cause });
   }
 };
@@ -103,10 +105,10 @@ const AnthropicResponseSchema = z
   })
   .passthrough();
 
-const withAbortDeadline = async (
+const withAbortDeadline = async <T>(
   deadlineMs: number,
-  run: (signal: AbortSignal) => Promise<Response>,
-): Promise<Response> => {
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs);
   try {
@@ -124,27 +126,31 @@ export const createProvider = (
     return {
       id: "openai",
       async generate(request) {
-        const response = await withAbortDeadline(request.deadlineMs, (signal) =>
-          fetchImplementation(
-            config.endpoint ?? "https://api.openai.com/v1/responses",
-            {
-              method: "POST",
-              signal,
-              headers: {
-                Authorization: `Bearer ${config.apiKey}`,
-                "Content-Type": "application/json",
+        const raw = await withAbortDeadline(
+          request.deadlineMs,
+          async (signal) => {
+            const response = await fetchImplementation(
+              config.endpoint ?? "https://api.openai.com/v1/responses",
+              {
+                method: "POST",
+                signal,
+                headers: {
+                  Authorization: `Bearer ${config.apiKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: request.model,
+                  instructions: request.system,
+                  input: request.user,
+                  store: false,
+                  text: { format: { type: "json_object" } },
+                }),
               },
-              body: JSON.stringify({
-                model: request.model,
-                instructions: request.system,
-                input: request.user,
-                text: { format: { type: "json_object" } },
-              }),
-            },
-          ),
+            );
+            if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
+            return readJson(response);
+          },
         );
-        const raw = await readJson(response);
-        if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
         const body = OpenAIResponseSchema.parse(raw);
         const inputTokens = body.usage.input_tokens;
         const outputTokens = body.usage.output_tokens;
@@ -165,28 +171,32 @@ export const createProvider = (
   return {
     id: "anthropic",
     async generate(request) {
-      const response = await withAbortDeadline(request.deadlineMs, (signal) =>
-        fetchImplementation(
-          config.endpoint ?? "https://api.anthropic.com/v1/messages",
-          {
-            method: "POST",
-            signal,
-            headers: {
-              "x-api-key": config.apiKey,
-              "anthropic-version": "2023-06-01",
-              "Content-Type": "application/json",
+      const raw = await withAbortDeadline(
+        request.deadlineMs,
+        async (signal) => {
+          const response = await fetchImplementation(
+            config.endpoint ?? "https://api.anthropic.com/v1/messages",
+            {
+              method: "POST",
+              signal,
+              headers: {
+                "x-api-key": config.apiKey,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: request.model,
+                max_tokens: 8192,
+                system: request.system,
+                messages: [{ role: "user", content: request.user }],
+              }),
             },
-            body: JSON.stringify({
-              model: request.model,
-              max_tokens: 8192,
-              system: request.system,
-              messages: [{ role: "user", content: request.user }],
-            }),
-          },
-        ),
+          );
+          if (!response.ok)
+            throw new Error(`Anthropic HTTP ${response.status}`);
+          return readJson(response);
+        },
       );
-      const raw = await readJson(response);
-      if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}`);
       const body = AnthropicResponseSchema.parse(raw);
       const inputTokens = body.usage.input_tokens;
       const outputTokens = body.usage.output_tokens;

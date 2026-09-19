@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import type {
   Assessment,
   Chunk,
@@ -24,8 +25,10 @@ import type {
 import {
   AssessmentSchema,
   JournalEntryIdSchema,
+  ModelIdentifierSchema,
   RelevanceResultSchema,
   SemanticComparisonSchema,
+  UsageSchema,
 } from "../schema";
 import { applyPatch } from "./apply_patch";
 import { runBaseline } from "./baseline";
@@ -61,6 +64,17 @@ type AdapterCall = {
   latencyMs: number;
 };
 
+const AdapterCallSchema = ModelIdentifierSchema.extend({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  promptVersion: z.string().min(1),
+  usage: UsageSchema.refine(
+    (usage) => usage.totalTokens === usage.inputTokens + usage.outputTokens,
+    { message: "totalTokens must equal inputTokens plus outputTokens" },
+  ),
+  latencyMs: z.number().nonnegative(),
+}).strict();
+
 const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
   if (
     typeof adapter !== "object" ||
@@ -69,9 +83,24 @@ const lastAdapterCall = (adapter: unknown): AdapterCall | undefined => {
     typeof adapter.getLastCall !== "function"
   )
     return undefined;
-  const call = adapter.getLastCall();
-  if (typeof call !== "object" || call === null) return undefined;
-  return call as AdapterCall;
+  const parsed = AdapterCallSchema.safeParse(adapter.getLastCall());
+  return parsed.success ? parsed.data : undefined;
+};
+
+const adapterCallFor = (
+  adapter: unknown,
+  result: object,
+): AdapterCall | undefined => {
+  if (
+    typeof adapter === "object" &&
+    adapter !== null &&
+    "getCallFor" in adapter &&
+    typeof adapter.getCallFor === "function"
+  ) {
+    const parsed = AdapterCallSchema.safeParse(adapter.getCallFor(result));
+    return parsed.success ? parsed.data : undefined;
+  }
+  return undefined;
 };
 
 const modelIdentifier = (call: AdapterCall): ModelIdentifier => ({
@@ -326,9 +355,14 @@ const appendSemanticComparison = async (
     )
     .then(
       (value) => {
+        const evaluatorCall = adapterCallFor(evaluator, value);
         const parsed = SemanticComparisonSchema.safeParse(value);
         return parsed.success
-          ? { type: "comparison" as const, value: parsed.data }
+          ? {
+              type: "comparison" as const,
+              value: parsed.data,
+              evaluatorCall,
+            }
           : {
               type: "invalid_response" as const,
               reason: `malformed semantic comparison: ${schemaMessage(parsed.error.issues)}`,
@@ -376,7 +410,7 @@ const appendSemanticComparison = async (
 
   let journaled: Result<void, DomainError>;
   try {
-    const evaluatorCall = lastAdapterCall(evaluator);
+    const evaluatorCall = result.value.evaluatorCall;
     journaled = await dependencies.store.appendJournal({
       type: "semantic_comparison",
       id: journalId(chunk, attempt, "comparison"),
@@ -442,6 +476,7 @@ const appendAudit = async (
     | "failed"
     | "timed_out" = "not_sampled";
   let patch: MemoryPatch | undefined;
+  let auditWriterCall: AdapterCall | undefined;
   if (sampled) {
     const deadline = dependencies.auditDeadlineMs ?? DEFAULT_AUDIT_DEADLINE_MS;
     const result = await withDeadline(
@@ -454,7 +489,11 @@ const appendAudit = async (
             affectedTopicIds: memory.topics.map(({ id }) => id),
           }),
         )
-        .then((value) => ({ type: "patch" as const, value }))
+        .then((value) => ({
+          type: "patch" as const,
+          value,
+          writerCall: adapterCallFor(dependencies.writer, value),
+        }))
         .catch(() => ({ type: "failed" as const })),
       deadline,
     );
@@ -462,6 +501,7 @@ const appendAudit = async (
     else {
       if (result.value.type === "failed") outcome = "failed";
       else {
+        auditWriterCall = result.value.writerCall;
         const valid = validatePatch(memory, chunk, result.value.value);
         if (!valid.ok) outcome = "failed";
         else {
@@ -471,7 +511,6 @@ const appendAudit = async (
       }
     }
   }
-  const auditWriterCall = lastAdapterCall(dependencies.writer);
   const journaled = await dependencies.store.appendJournal({
     type: "audit_record",
     id: journalId(chunk, attempt, "audit"),

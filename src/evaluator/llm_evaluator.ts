@@ -11,11 +11,12 @@ import {
   type ModelCall,
 } from "../writer/provider";
 import { parseSemanticComparison } from "./parse";
-import { buildEvaluatorPrompt } from "./prompt";
+import { buildEvaluatorPrompt, EVALUATOR_PROMPT_VERSION } from "./prompt";
 import { memorySemanticallyEqual } from "./snapshot_diff";
 
 export class LlmEvaluator implements Evaluator {
   #lastCall: ModelCall | undefined;
+  readonly #callsByResult = new WeakMap<SemanticComparison, ModelCall>();
   constructor(
     readonly provider: GenerativeProvider,
     readonly config: ModelAdapterConfig,
@@ -27,16 +28,30 @@ export class LlmEvaluator implements Evaluator {
       : structuredClone(this.#lastCall);
   }
 
+  getCallFor(result: SemanticComparison): ModelCall | undefined {
+    const call = this.#callsByResult.get(result);
+    return call === undefined ? undefined : structuredClone(call);
+  }
+
+  #record(result: SemanticComparison, call: ModelCall): SemanticComparison {
+    this.#lastCall = call;
+    this.#callsByResult.set(result, structuredClone(call));
+    return result;
+  }
+
   async compare(input: SemanticComparisonInput): Promise<SemanticComparison> {
     if (memorySemanticallyEqual(input.before, input.after)) {
-      this.#lastCall = {
+      const result: SemanticComparison = {
+        verdict: "equivalent",
+        changes: [],
+      };
+      return this.#record(result, {
         provider: this.provider.id,
         model: this.config.model,
-        promptVersion: this.config.promptVersion,
+        promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         latencyMs: 0,
-      };
-      return { verdict: "equivalent", changes: [] };
+      });
     }
     const prompt = buildEvaluatorPrompt(input);
     const startedAt = performance.now();
@@ -44,7 +59,7 @@ export class LlmEvaluator implements Evaluator {
     const call = (outputTokens = 0): ModelCall => ({
       provider: this.provider.id,
       model: this.config.model,
-      promptVersion: this.config.promptVersion,
+      promptVersion: EVALUATOR_PROMPT_VERSION,
       usage: {
         inputTokens,
         outputTokens,
@@ -72,27 +87,29 @@ export class LlmEvaluator implements Evaluator {
           .generate({
             ...prompt,
             model: this.config.model,
-            promptVersion: this.config.promptVersion,
+            promptVersion: EVALUATOR_PROMPT_VERSION,
             deadlineMs: this.config.deadlineMs,
             responseSchemaName: "SemanticComparison",
           })
           .then(resolve, reject)
           .finally(() => clearTimeout(timer));
       });
-      this.#lastCall = {
+      const completedCall: ModelCall = {
         provider: this.provider.id,
         model: response.model,
-        promptVersion: this.config.promptVersion,
+        promptVersion: EVALUATOR_PROMPT_VERSION,
         usage: response.usage,
         latencyMs: Math.max(0, performance.now() - startedAt),
       };
       try {
-        return parseSemanticComparison(response.text);
+        const result = parseSemanticComparison(response.text);
+        return this.#record(result, completedCall);
       } catch (cause) {
+        this.#lastCall = completedCall;
         throw new AdapterError(
           "invalid_response",
           cause instanceof Error ? cause.message : String(cause),
-          this.#lastCall,
+          completedCall,
           cause,
         );
       }

@@ -131,3 +131,51 @@ test("choice outside the question criteria is rejected", () => {
     ),
   ).toThrow("choice outside criteria for question id: topic");
 });
+
+test("choice probabilities must form a complete normalized distribution", () => {
+  const request: JevRequest = {
+    model: JEV_MODEL,
+    state: "state",
+    questions: {
+      topic: {
+        type: "choice",
+        instructions: "relationship?",
+        criteria: { new_info: "new", same_info: "same" },
+      },
+    },
+  };
+  expect(() =>
+    parseJevResponse(
+      {
+        answers: {
+          topic: {
+            type: "choice",
+            choice: "new_info",
+            probabilities: { new_info: 0.8, same_info: 0.8 },
+            confidence: 0.2,
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      request,
+    ),
+  ).toThrow("invalid probability distribution");
+});
+
+test("response model must match the pinned Jev model", () => {
+  const request: JevRequest = {
+    model: JEV_MODEL,
+    state: "state",
+    questions: { topic: { type: "noul", instructions: "related?" } },
+  };
+  expect(() =>
+    parseJevResponse(
+      {
+        model: "jev-latest",
+        answers: { topic: { type: "noul", noul: 0.5 } },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      request,
+    ),
+  ).toThrow();
+});

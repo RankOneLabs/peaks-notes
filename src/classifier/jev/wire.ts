@@ -64,7 +64,7 @@ export type JevAnswer = z.infer<typeof JevAnswerSchema>;
 
 export const JevResponseSchema = z
   .object({
-    model: z.string().min(1).optional(),
+    model: z.literal(JEV_MODEL).optional(),
     answers: z.record(z.string().min(1), JevAnswerSchema),
     usage: z
       .object({
@@ -98,6 +98,15 @@ export const parseJevResponse = (
           (choice) => answer.probabilities[choice] === undefined,
         )
       ) {
+        throw new Error(
+          `invalid probability distribution for question id: ${id}`,
+        );
+      }
+      const probabilitySum = Object.values(answer.probabilities).reduce(
+        (sum, probability) => sum + probability,
+        0,
+      );
+      if (Math.abs(probabilitySum - 1) > 1e-6) {
         throw new Error(
           `invalid probability distribution for question id: ${id}`,
         );

@@ -43,6 +43,7 @@ export class JevClassifier implements Classifier {
 
   #record(trace: JevCallTrace): void {
     this.#lastCall = trace;
+    this.calls.length = 0;
     this.calls.push(structuredClone(trace));
   }
 

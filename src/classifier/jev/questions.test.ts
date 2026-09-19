@@ -69,3 +69,25 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
     instructions: expect.stringContaining("topic-network"),
   });
 });
+
+test("the uncovered question id cannot collide with a selected topic", () => {
+  expect(() =>
+    relationshipQuestions({
+      chunk,
+      taskContext,
+      selectedTopics: [
+        {
+          id: "uncovered" as never,
+          title: "Collision",
+          description: "reserved",
+          version: 1,
+          summary: "summary",
+          sources: [],
+          unresolved: [],
+        },
+      ],
+      topicCatalog: [],
+      protectedRecords: [],
+    }),
+  ).toThrow("reserved for Jev uncovered content");
+});

@@ -272,10 +272,128 @@ test("unchanged live evaluation is journaled with the live model identity", asyn
       evaluatorModel: {
         provider: "recorded",
         model: "live-evaluator-model",
-        promptVersion: "evaluator-live-v7",
+        promptVersion: "evaluator-v1",
       },
     }),
   );
+});
+
+test("unsampled audit does not reuse metadata from an earlier writer call", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  let proposeCalls = 0;
+  let lastCall:
+    | {
+        provider: string;
+        model: string;
+        promptVersion: string;
+        usage: {
+          inputTokens: number;
+          outputTokens: number;
+          totalTokens: number;
+        };
+        latencyMs: number;
+      }
+    | undefined;
+  const writer: Writer & { getLastCall: () => typeof lastCall } = {
+    async propose() {
+      proposeCalls += 1;
+      lastCall = {
+        provider: "recorded",
+        model: "previous-call",
+        promptVersion: "writer-v1",
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        latencyMs: 5,
+      };
+      return {
+        replacements: [],
+        newTopics: [],
+        addProtected: [],
+        supersedeProtected: [],
+      };
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+    getLastCall: () => lastCall,
+  };
+  await writer.propose({
+    chunk: fixture.chunk,
+    memory: fixture.initialMemory,
+    taskContext: fixture.taskContext,
+    affectedTopicIds: [],
+  });
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier({
+      relevance: fixture.stubs.relevance,
+      assessments: fixture.stubs.assessments,
+    }),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: {
+      ...fixture.executionPolicy,
+      mode: "active",
+      bypassAuditRate: 0,
+    },
+  });
+  expect(proposeCalls).toBe(1);
+  const audit = store.journal.find((entry) => entry.type === "audit_record");
+  expect(audit).toMatchObject({ sampled: false, outcome: "not_sampled" });
+  expect(audit).not.toHaveProperty("writerModel");
+  expect(audit).not.toHaveProperty("writerUsage");
+  expect(audit).not.toHaveProperty("writerLatencyMs");
+});
+
+test("malformed adapter metadata is not copied into a commit", async () => {
+  const fixture = fixtures.find(
+    ({ name }) => name === "same-seed audit assignment",
+  );
+  if (fixture === undefined) throw new Error("fixture missing");
+  const topic = fixture.initialMemory.topics[0];
+  if (topic === undefined) throw new Error("fixture topic missing");
+  const writer: Writer & { getLastCall: () => unknown } = {
+    async propose() {
+      return {
+        replacements: [
+          {
+            topicId: topic.id,
+            expectedVersion: topic.version,
+            title: topic.title,
+            description: topic.description,
+            summary: `${topic.summary} Updated.`,
+            sources: [{ messageId: fixture.chunk.messages[0]?.id as never }],
+            unresolved: topic.unresolved,
+          },
+        ],
+        newTopics: [],
+        addProtected: [],
+        supersedeProtected: [],
+      };
+    },
+    async compress() {
+      throw new Error("unused");
+    },
+    getLastCall: () => ({ provider: "unchecked", latencyMs: -1 }),
+  };
+  const store = new MemoryStore(fixture.initialMemory);
+  await ingest(fixture.chunk, fixture.taskContext, {
+    store,
+    classifier: new StubClassifier(),
+    writer,
+    classifierPolicy: fixture.classifierPolicy,
+    executionPolicy: fixture.executionPolicy,
+    mode: "baseline",
+  });
+  const commit = store.commits.find(
+    (candidate) => candidate.type === "committed_update",
+  );
+  expect(commit?.type).toBe("committed_update");
+  if (commit?.type !== "committed_update") throw new Error("commit missing");
+  expect(commit.journalEntry.writerModel.provider).toBe("stub");
 });
 
 test("shadow commits a writer patch despite a confident same-info decision", async () => {
