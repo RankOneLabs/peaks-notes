@@ -8,7 +8,59 @@ An MVP live conversation summarizer. It reads completed conversation chunks as t
 
 The demo uses the tracked 16-turn incident fixture and its real Jev routing decisions. Conversation turns scroll on the left, Jev classifies each completed turn in the center, and the actual summary updates—or remains unchanged—on the right.
 
-The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md). The Claude Code Stop hook that keeps a summary of each session in the project's `peaks/` directory is described in [docs/claude-code-hook.md](docs/claude-code-hook.md).
+[Watch the MP4](demo/peaks-live-demo.mp4?raw=1) · 35 seconds, 1920×1080, H.264. GitHub does not embed the player in this README; click the cover or link to play it.
+
+## Run it on a real conversation
+
+Requirements: [Bun](https://bun.sh), a Claude Code conversation, a TypeSafe/Jev bearer key, and an OpenAI-, Anthropic-, or OpenRouter-compatible writer model.
+
+```sh
+bun install
+cp .env.example .env
+# Replace the placeholder keys and writer model in .env.
+bun run summarize --tools
+```
+
+The command finds your most recently modified Claude Code transcript, processes every completed turn, prints the summary, and writes it to:
+
+```text
+peaks/<session-id>.md
+```
+
+Have another exchange in that Claude Code session and run `bun run summarize --tools` again to see the same file update. Pass a transcript explicitly when the latest session is not the one you want:
+
+```sh
+bun run summarize --tools /path/to/session.jsonl
+```
+
+Omit `--tools` to summarize only user prompts and assistant text. With `--tools`, Peaks also reads completed tool calls and their results.
+
+## Update automatically after every turn
+
+Install the Claude Code Stop hook once. Replace `/absolute/path/to/peaks` with this checkout's absolute path in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun /absolute/path/to/peaks/src/hosts/claude_code/hook.ts --mode tools"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Keep `.env` in the Peaks checkout. After each completed Claude Code turn, the hook updates `peaks/<session-id>.md` inside the project where that conversation is running. Worker timing and errors are recorded in `peaks/.state/<session-id>.log`.
+
+The hook runs in shadow mode today: Jev records its routing decision, while the writer independently assesses every completed turn. See [the hook guide](docs/claude-code-hook.md) for processing details, file locations, limitations, and the difference between chat and tools modes.
+
+## Development and fixture replay
 
 ```sh
 bun install
@@ -17,6 +69,8 @@ bun run lint
 bun test
 bun run replay --fixtures fixtures/deterministic --adapters stub
 ```
+
+The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md).
 
 ## Configuration
 
