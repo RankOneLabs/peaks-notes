@@ -2,6 +2,7 @@
   "name": "peaks",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "demo": "bun src/demo/cli.ts",
