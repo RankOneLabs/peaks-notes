@@ -22,6 +22,10 @@ export const completedTurnOffsets = (transcript: string): number[] => {
   const promptStarts: number[] = [];
   let bytes = 0;
   for (const line of lines) {
+    if (line.trim() === "") {
+      bytes += Buffer.byteLength(line);
+      continue;
+    }
     const entry = JSON.parse(line) as TranscriptLine;
     if (entry.type === "user" && entry.origin?.kind === "human")
       promptStarts.push(bytes);
@@ -30,10 +34,11 @@ export const completedTurnOffsets = (transcript: string): number[] => {
   return promptStarts.map((_, index) => promptStarts[index + 1] ?? bytes);
 };
 
-const promptAt = (transcript: string, turn: number): string => {
+export const promptAt = (transcript: string, turn: number): string => {
   const prompts = transcript
     .trimEnd()
     .split("\n")
+    .filter((line) => line.trim() !== "")
     .map((line) => JSON.parse(line) as TranscriptLine)
     .filter((entry) => entry.type === "user" && entry.origin?.kind === "human");
   return String(prompts[turn]?.message?.content ?? "");
@@ -47,12 +52,19 @@ const main = async (): Promise<void> => {
   const store = new SqliteStore(`${outputDirectory}/state.sqlite`);
   try {
     const config = loadSessionConfig();
-    const dependencies = sessionDependencies(
-      "peaks-live-demo",
-      store,
-      config,
-      createConfiguredAdapters(config),
-    );
+    const dependencies = {
+      ...sessionDependencies(
+        "peaks-live-demo",
+        store,
+        config,
+        createConfiguredAdapters(config),
+      ),
+      executionPolicy: {
+        mode: "active" as const,
+        bypassAuditRate: 0,
+        auditSeed: "peaks-live-demo",
+      },
+    };
     console.log(`Fixture: ${fixture}`);
     console.log("Adapters: live Jev classifier + live writer\n");
     for (const [index, untilBytes] of offsets.entries()) {
