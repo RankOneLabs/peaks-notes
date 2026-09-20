@@ -44,7 +44,15 @@ export const FixtureLabelSchema = z
     requiredCases: z.array(RequiredCaseSchema).min(1),
     relevantTopicIds: z.array(z.string()).default([]),
     expectedRelationships: z
-      .record(z.string(), z.enum(["new_info", "changing_info", "same_info"]))
+      .record(
+        z.string(),
+        z.enum([
+          "new_info",
+          "changing_info",
+          "same_info",
+          "no_meaningful_addition",
+        ]),
+      )
       .default({}),
     requiresUpdate: z.boolean(),
     criticalUpdate: z.boolean().default(false),

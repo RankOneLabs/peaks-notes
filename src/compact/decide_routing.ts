@@ -12,7 +12,17 @@ export type RoutingDecision =
   | { kind: "writer"; affectedTopicIds: TopicId[]; reason: string }
   | { kind: "bypass"; affectedTopicIds: TopicId[]; reason: string };
 
-const rank = { same_info: 0, new_info: 1, changing_info: 2 } as const;
+const rank = {
+  same_info: 0,
+  no_meaningful_addition: 0,
+  new_info: 1,
+  changing_info: 2,
+} as const;
+
+const isNoUpdateRelationship = (
+  relationship: Assessment["relations"][number]["relationship"],
+): boolean =>
+  relationship === "same_info" || relationship === "no_meaningful_addition";
 
 export const decideRouting = (
   selectedTopics: readonly Topic[],
@@ -74,7 +84,7 @@ export const decideRouting = (
   const ids = selectedTopics.map(({ id }) => id);
   if (
     [...relations.values()].some(
-      ({ relationship }) => relationship !== "same_info",
+      ({ relationship }) => !isNoUpdateRelationship(relationship),
     )
   ) {
     return ok({
@@ -83,15 +93,14 @@ export const decideRouting = (
       reason: "new_or_changing_info",
     });
   }
-  if (
-    [...relations.values()].some(
-      ({ confidence }) => confidence < policy.sameInfoMinConfidence,
-    )
-  ) {
+  const lowConfidenceRelation = [...relations.values()].find(
+    ({ confidence }) => confidence < policy.sameInfoMinConfidence,
+  );
+  if (lowConfidenceRelation !== undefined) {
     return ok({
       kind: "writer",
       affectedTopicIds: ids,
-      reason: "low_confidence_same_info",
+      reason: `low_confidence_${lowConfidenceRelation.relationship}`,
     });
   }
   if (
@@ -111,9 +120,14 @@ export const decideRouting = (
       reason: "low_confidence_uncovered",
     });
   }
+  const onlyNoMeaningfulAdditions =
+    relations.size > 0 &&
+    [...relations.values()].every(
+      ({ relationship }) => relationship === "no_meaningful_addition",
+    );
   return ok({
     kind: "bypass",
     affectedTopicIds: ids,
-    reason: `same_info_and_uncovered_${assessment.uncovered.outcome}`,
+    reason: `${onlyNoMeaningfulAdditions ? "no_meaningful_addition" : "same_info"}_and_uncovered_${assessment.uncovered.outcome}`,
   });
 };

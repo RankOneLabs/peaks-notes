@@ -112,7 +112,11 @@ With an empty catalog, send the chunk directly to the writer for initial topic c
 The second Jev pass receives the complete chunk and the full current summaries of every selected topic, with the task, compaction instructions, and relevant protected records. Generate one choice question per selected topic:
 
 ```ts
-type Relationship = 'new_info' | 'changing_info' | 'same_info';
+type Relationship =
+  | 'new_info'
+  | 'changing_info'
+  | 'same_info'
+  | 'no_meaningful_addition';
 type Assessment = {
   relations: Array<{
     topicId: string;
@@ -130,17 +134,18 @@ type Assessment = {
 | --- | --- | --- |
 | new_info | Relevant information extends the section without changing its existing claims | Send section and chunk to writer |
 | changing_info | Relevant information corrects, contradicts, qualifies, or supersedes an existing claim | Send section and chunk to writer for reconciliation |
-| same_info | All information relevant to this section is already represented, including scope, qualifiers, status, and necessary exact values | No section update, subject to the confidence gate |
+| same_info | Legacy replay value for information already represented; live Jev questions no longer emit it | Treat like `no_meaningful_addition` |
+| no_meaningful_addition | The chunk adds no durable information: substantive information is already represented, or it only recaps, acknowledges, reacts, closes, or reaffirms an unchanged preference | No section update, subject to the confidence gate |
 
-If a chunk both adds and changes information within a topic, `changing_info` takes precedence. The writer sees the full chunk and handles both. A low-confidence classification is an orchestration-level escalation; it does not require a fourth relationship choice.
+If a chunk both adds and changes information within a topic, `changing_info` takes precedence. The writer sees the full chunk and handles both. The live Jev adapter uses one `no_meaningful_addition` choice for both already-represented substantive information and conversational references with no durable information gain. `same_info` remains in the core type only so historical journals and fixtures remain replayable. A low-confidence classification remains an orchestration-level escalation rather than authorizing a bypass.
 
-Treat **same_info as the consequential bypass decision**. Accept it only above a separately evaluated confidence threshold; otherwise ask the writer to review. Provider confidence is a routing signal, not proof of correctness. New/changing verdicts always reach the writer, which may legitimately conclude that no update is needed. A false-positive match does not force a memory mutation.
+Treat **same_info and no_meaningful_addition as consequential bypass decisions**. Accept either only above a separately evaluated confidence threshold; otherwise ask the writer to review. Provider confidence is a routing signal, not proof of correctness. New/changing verdicts always reach the writer, which may legitimately conclude that no update is needed. A false-positive match does not force a memory mutation.
 
 Also ask a global uncovered-content question: does any meaningful content remain outside the selected topics, even if other parts matched? Return `none`, `new_topic`, `transient`, or `uncertain`. Include the entire topic catalog so the writer can distinguish a genuinely new topic from a routing miss; if the catalog suggests an existing but unselected topic, escalate to the writer with its full summary rather than blindly creating a duplicate. This check still runs when no topic passes Step B.
 
 A confident `new_topic` routes to the writer for creation or routing repair. `uncertain`, low-confidence `none`/`transient`, or incomplete input routes to writer review. Only sufficiently supported `none`/`transient` permits bypass. Tune this bypass gate for missed novel information as well as cost; novelty can coexist with matches to existing topics.
 
-A chunk gets a no-update decision only when all selected-topic verdicts pass the same-info gate, the uncovered-content check passes its no-change gate, and protected information remains retained. Omitted relationships, invalid responses, or incomplete input never authorize a no-update decision.
+A chunk gets a no-update decision only when all selected-topic verdicts are confident `same_info` or `no_meaningful_addition`, the uncovered-content check passes its no-change gate, and protected information remains retained. Omitted relationships, invalid responses, or incomplete input never authorize a no-update decision.
 
 These are **two sequential logical passes in the MVP**: score relevance, select in code, then classify relationships. Batch each pass's independent questions where the provider permits. Do not combine the passes by default. If selected summaries exceed the request budget, batch without silently truncating evidence; if the global coverage check cannot inspect enough context, escalate or leave the chunk unprocessed. The adapter owns provider request limits and response normalization. Verify the current Jev wire format when implementing; these TypeScript types describe the core contract, not an asserted API payload.
 
@@ -331,7 +336,7 @@ Initial acceptance: all deterministic failure/idempotency cases pass; no protect
 
 Existing topic `camera-network`: “Cameras use local RTSP. Internet access is blocked at the router.”
 
-- “Still using RTSP locally.” → same_info; no write.
+- “Still using RTSP locally.” → no_meaningful_addition; no write.
 - “The garage camera is now at 192.168.50.192.” → new_info; update the section with the device/IP mapping.
 - “I forgot to apply the router setting; internet access was not blocked.” → changing_info; correct the current status and preserve that blocking is intended, not yet established.
 - “Also, the outdoor Pi camera needs a battery.” → new topic, unless an existing hardware topic already covers it.

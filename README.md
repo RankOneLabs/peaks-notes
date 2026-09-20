@@ -2,6 +2,12 @@
 
 An MVP live conversation summarizer. It reads completed conversation chunks as they are submitted and maintains a separate, topic-organized summary, backed by an append-only source archive and audit journal. It never modifies the conversation it reads. Handoffs and context compaction may consume the summary later, but they are not responsibilities of Peaks.
 
+## Demo
+
+[![Peaks live conversation summarizer demo](demo/peaks-live-demo-cover.png)](demo/peaks-live-demo.mp4)
+
+The demo uses the tracked 16-turn incident fixture and its real Jev routing decisions. Conversation turns scroll on the left, Jev classifies each completed turn in the center, and the actual summary updates—or remains unchanged—on the right.
+
 The tracked design is [docs/topic-compactor-spec.md](docs/topic-compactor-spec.md). Project conventions and toolchain decisions are recorded in [CLAUDE.md](CLAUDE.md). Replay, threshold sweeps, and report metrics are covered in [docs/evaluation.md](docs/evaluation.md); the Jev classifier's verified provider facts and question templates are in [docs/jev-adapter.md](docs/jev-adapter.md). The Claude Code Stop hook that keeps a summary of each session in the project's `peaks/` directory is described in [docs/claude-code-hook.md](docs/claude-code-hook.md).
 
 ```sh

@@ -60,10 +60,22 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
     protectedRecords: [],
   };
   const built = relationshipQuestions(input);
+  const topicInstructions = String(
+    built.questions["topic-network"]?.instructions,
+  );
+  expect(topicInstructions).toContain("Exact complete summary 192.168.1.2");
+  expect(topicInstructions).toContain("Template version: relationship-v6");
   expect(built.questions["topic-network"]).toMatchObject({
     type: "choice",
-    instructions: expect.stringContaining("Exact complete summary 192.168.1.2"),
   });
+  expect(built.questions["topic-network"]).toMatchObject({
+    criteria: {
+      no_meaningful_addition: expect.stringContaining("'still'"),
+    },
+  });
+  expect(built.questions["topic-network"]?.criteria).not.toHaveProperty(
+    "same_info",
+  );
   const uncoveredInstructions = built.questions.uncovered?.instructions;
   expect(built.questions.uncovered).toMatchObject({
     type: "choice",
@@ -73,6 +85,11 @@ test("relationships carry full summaries and uncovered carries full catalog", ()
     "Exact complete summary 192.168.1.2",
   );
   expect(String(uncoveredInstructions)).toContain("Keep this uncertainty");
+  expect(built.questions.uncovered).toMatchObject({
+    criteria: {
+      transient: expect.stringContaining("conversational closure"),
+    },
+  });
 });
 
 test("relevance transcript data cannot close its prompt delimiter", () => {

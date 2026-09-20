@@ -59,6 +59,54 @@ test("confident same info and no uncovered content bypasses", () => {
   expect(result.ok && result.value.kind).toBe("bypass");
 });
 
+test("confident no meaningful addition bypasses with a distinct reason", () => {
+  const result = decideRouting(
+    selected,
+    {
+      relations: [
+        {
+          topicId: "a" as never,
+          relationship: "no_meaningful_addition",
+          confidence: 0.9,
+        },
+      ],
+      uncovered: { outcome: "none", confidence: 0.9 },
+    },
+    policy,
+  );
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      kind: "bypass",
+      reason: "no_meaningful_addition_and_uncovered_none",
+    },
+  });
+});
+
+test("low-confidence no meaningful addition still reaches the writer", () => {
+  const result = decideRouting(
+    selected,
+    {
+      relations: [
+        {
+          topicId: "a" as never,
+          relationship: "no_meaningful_addition",
+          confidence: 0.79,
+        },
+      ],
+      uncovered: { outcome: "none", confidence: 0.9 },
+    },
+    policy,
+  );
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      kind: "writer",
+      reason: "low_confidence_no_meaningful_addition",
+    },
+  });
+});
+
 test("equal-ranked relations use the lowest confidence regardless of order", () => {
   const relation = (confidence: number) => ({
     topicId: "a" as never,

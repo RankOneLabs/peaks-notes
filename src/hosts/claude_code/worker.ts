@@ -53,6 +53,7 @@ export const sessionDependencies = (
   executionPolicy: { mode: "shadow", bypassAuditRate: 0, auditSeed: session },
   auditDeadlineMs: config.evaluation.auditDeadlineMs,
   shadowComparisonDeadlineMs: config.evaluation.shadowComparisonDeadlineMs,
+  writerDeadlineMs: config.writer.deadlineMs,
   budget: {
     maxTokens: SUMMARY_MAX_TOKENS,
     summaryBudgetTokens: SUMMARY_TOPIC_TOKENS,

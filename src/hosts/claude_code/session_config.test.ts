@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConfiguredAdapters } from "../../adapters";
+import { SqliteStore } from "../../store/sqlite";
 import { loadSessionConfig } from "./session_config";
+import { sessionDependencies } from "./worker";
 
 let directory: string | undefined;
 afterEach(() => {
@@ -27,4 +30,17 @@ test("the Peaks env file overrides stale host model settings", () => {
   );
 
   expect(config.writer.deadlineMs).toBe(120_000);
+
+  const store = new SqliteStore(":memory:");
+  try {
+    const dependencies = sessionDependencies(
+      "session",
+      store,
+      config,
+      createConfiguredAdapters(config),
+    );
+    expect(dependencies.writerDeadlineMs).toBe(120_000);
+  } finally {
+    store.close();
+  }
 });
