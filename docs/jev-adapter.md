@@ -18,17 +18,17 @@ The implemented adapter uses Noul (rather than Score) for relevance, so its valu
 
 The shared state contains the trusted current task and compaction instructions, followed by the complete chunk inside `<transcript-data>` delimiters. Relationship state also contains protected records inside `<protected-records-data>` delimiters. Transcript text is data, never model instruction text. Every value placed inside a data delimiter is JSON-serialized with `<` escaped as `\u003c`, so quoted content cannot close its delimiter.
 
-Each relevance question is keyed by the topic ID, opens with a `Template version: relevance-v2` line, and uses:
+Each relevance question is keyed by the topic ID, opens with a `Template version: relevance-v3` line, and uses:
 
-> Does any meaningful part of the transcript chunk relate to this topic? Score relevance strength, including brief corrections, rather than the fraction of the chunk devoted to it.
+> Does any meaningful part of the transcript chunk relate to this topic? Score relevance strength, including brief corrections, rather than the fraction of the chunk devoted to it. Acknowledgment, praise, emotion, a requested recap, or an unchanged preference is not meaningful by itself.
 
-It then includes `Topic id`, `Topic title`, and `Routing description`. The Noul true criterion is “At least one meaningful fact, correction, constraint, or status update relates to this topic.” The false criterion is “No meaningful part relates to this topic.”
+It then includes `Topic id`, `Topic title`, and `Routing description`. The Noul true criterion is “At least one meaningful fact, correction, constraint, or status update relates to this topic.” The false criterion explicitly includes acknowledgments, requested recaps, and unchanged preferences that add no durable information.
 
 Each selected-topic relationship question is keyed by topic ID, contains the topic's ID and title plus its complete summary inside `<full-topic-summary-data>` delimiters, and uses:
 
-> Classify how the transcript relates to the selected topic. If it both adds and changes information, choose changing_info.
+> Classify how the transcript relates to the selected topic. Judge information gain against the complete existing summary, not conversational engagement. If it both adds and changes information, choose changing_info.
 
-Its criteria are `new_info`, `changing_info`, and `same_info`, using the definitions in specification §5C. The versioned `relationship-v3` `uncovered` question contains every selected topic's stable ID, title, complete summary, and unresolved issues inside `<selected-topic-evidence-data>`, then the complete topic catalog inside `<complete-topic-catalog-data>`. The ID `uncovered` is reserved; a topic with that ID is rejected. An empty selection is represented by an empty JSON array. It uses:
+Its criteria are `new_info`, `changing_info`, and `no_meaningful_addition`, using the definitions in specification §5C. `no_meaningful_addition` covers both substantive information already represented in memory and conversational references such as requested recaps, acknowledgments, reactions, closure, and unchanged preferences. This single no-write choice avoids dividing probability between equivalent routing outcomes. The core schema continues accepting the legacy `same_info` value when replaying older journals and fixtures, but the live adapter does not offer it in new questions. The versioned `relationship-v6` `uncovered` question contains every selected topic's stable ID, title, complete summary, and unresolved issues inside `<selected-topic-evidence-data>`, then the complete topic catalog inside `<complete-topic-catalog-data>`. Its `transient` outcome explicitly covers praise, thanks, emotion, and conversational closure with no new durable information. The ID `uncovered` is reserved; a topic with that ID is rejected. An empty selection is represented by an empty JSON array. It uses:
 
 > Classify any meaningful transcript content not covered by the selected topics. Content related to an unselected catalog topic is a routing miss and must be uncertain, never none. Use the complete catalog only to distinguish a genuinely new topic from a routing miss.
 

@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "demo": "bun src/demo/cli.ts",
+    "demo:video": "bun src/demo/video.ts",
     "summarize": "bun src/hosts/claude_code/cli.ts",
     "replay": "bun src/replay/cli.ts",
     "sweep": "bun src/replay/cli.ts sweep",

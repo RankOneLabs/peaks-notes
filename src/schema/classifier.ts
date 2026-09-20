@@ -41,6 +41,7 @@ export const RelationshipSchema = z.enum([
   "new_info",
   "changing_info",
   "same_info",
+  "no_meaningful_addition",
 ]);
 export type Relationship = z.infer<typeof RelationshipSchema>;
 

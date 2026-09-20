@@ -31,7 +31,7 @@ test("choice, distribution and confidence are retained", () => {
         criteria: {
           new_info: "new",
           changing_info: "changed",
-          same_info: "same",
+          no_meaningful_addition: "no durable addition",
         },
       },
       uncovered: {
@@ -51,8 +51,12 @@ test("choice, distribution and confidence are retained", () => {
       answers: {
         topic: {
           type: "choice",
-          choice: "same_info",
-          probabilities: { new_info: 0.1, changing_info: 0.1, same_info: 0.8 },
+          choice: "no_meaningful_addition",
+          probabilities: {
+            new_info: 0.05,
+            changing_info: 0.05,
+            no_meaningful_addition: 0.9,
+          },
           confidence: 0.7,
         },
         uncovered: {
@@ -73,10 +77,10 @@ test("choice, distribution and confidence are retained", () => {
   );
   const normalized = normalizeRelationships([request], [response]);
   expect(normalized.result.relations[0]).toMatchObject({
-    relationship: "same_info",
+    relationship: "no_meaningful_addition",
     confidence: 0.7,
   });
-  expect(normalized.trace[0]?.probabilities?.same_info).toBe(0.8);
+  expect(normalized.trace[0]?.probabilities?.no_meaningful_addition).toBe(0.9);
 });
 
 test("invalid probabilities, choices and missing ids are rejected", () => {
